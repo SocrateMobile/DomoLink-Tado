@@ -59,13 +59,13 @@ class TadoClient:
         session: aiohttp.ClientSession,
         access_token: str | None = None,
         refresh_token: str | None = None,
-        expires_at: float = 0.0,
+        expires_at: float | None = None,
         token_update_callback: Callable[[dict[str, Any]], Coroutine[Any, Any, None]] | None = None,
     ) -> None:
         self.session = session
         self.access_token = access_token
         self.refresh_token = refresh_token
-        self.expires_at = expires_at
+        self.expires_at = expires_at if expires_at is not None else (time.time() + 3600 if access_token else 0.0)
         self.token_update_callback = token_update_callback
         self._refresh_lock = asyncio.Lock()
 
@@ -120,14 +120,20 @@ class TadoClient:
                     "expires_at": time.time() + res.get("expires_in", 3600),
                 }
 
-            res = await resp.json()
-            error = res.get("error")
+            try:
+                res = await resp.json()
+                error = res.get("error")
+                error_desc = res.get("error_description", error)
+            except Exception:
+                error = None
+                error_desc = await resp.text()
+
             if error in ("authorization_pending", "slow_down"):
                 raise TadoDeviceFlowPending(error)
-            if error in ("expired_token", "access_denied"):
+            if error in ("expired_token", "access_denied", "invalid_grant", "bad_verification_code"):
                 raise TadoDeviceFlowExpired(error)
 
-            raise TadoAuthError(f"Token polling error ({resp.status}): {res.get('error_description', error)}")
+            raise TadoAuthError(f"Token polling error ({resp.status}): {error_desc}")
 
     async def async_get_valid_token(self) -> str:
         """Ensure the current access token is valid, refreshing if needed."""
@@ -138,6 +144,12 @@ class TadoClient:
             # Check again inside the lock
             if self.access_token and time.time() < (self.expires_at - 120):
                 return self.access_token
+
+            if not self.refresh_token:
+                if self.access_token:
+                    _LOGGER.warning("No refresh token available; using existing access token")
+                    return self.access_token
+                raise TadoAuthError("No refresh token available")
 
             return await self.async_refresh_token()
 
@@ -202,6 +214,8 @@ class TadoClient:
         headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
+            "Referer": "https://app.tado.com/",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         }
 
         try:

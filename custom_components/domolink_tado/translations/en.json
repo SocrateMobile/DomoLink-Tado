@@ -3,14 +3,14 @@
     "step": {
       "user": {
         "title": "DomoLink-Tado Connection",
-        "description": "Please link your Tado account using the secure Device Flow protocol.\n\n1. Open: **{verification_uri}**\n2. Enter the following code if prompted: **{user_code}**\n3. Confirm access on your Tado account, then click **Submit** below."
+        "description": "Please link your Tado account using the official secure Device Flow protocol.\n\n1. Open the link: **{verification_uri}**\n2. Enter the following code if prompted: **{user_code}**\n3. Confirm access on your Tado account, then click the blue **Submit** / **Valider** button below."
       }
     },
     "error": {
-      "authorization_pending": "Authorization pending on Tado. Please authorize the device code on the web page and click Submit.",
-      "code_expired": "Device code has expired. A new code has been generated, please try again.",
-      "cannot_connect": "Failed to connect to Tado servers.",
-      "unknown": "An unexpected error occurred."
+      "authorization_pending": "Authorization pending on Tado. Please authorize access on the Tado web page, then click Submit / Valider below.",
+      "code_expired": "Device code has expired. A new code has been generated, please open the new link above.",
+      "cannot_connect": "Failed to connect or authenticate with Tado. A new code has been generated, please open the link above.",
+      "unknown": "An unexpected error occurred. Please try again."
     },
     "abort": {
       "already_configured": "This Tado account is already configured in Home Assistant.",

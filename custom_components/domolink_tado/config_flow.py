@@ -63,8 +63,14 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
             try:
                 tokens = await TadoClient.poll_device_token(session, self._device_code)
+                _LOGGER.info("DomoLink-Tado: Device Flow token received successfully")
                 # Success! Now fetch home info
-                client = TadoClient(session, access_token=tokens["access_token"])
+                client = TadoClient(
+                    session=session,
+                    access_token=tokens["access_token"],
+                    refresh_token=tokens.get("refresh_token"),
+                    expires_at=tokens.get("expires_at"),
+                )
                 me = await client.get_me()
                 homes = me.get("homes", [])
                 if not homes:
@@ -102,16 +108,20 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 )
 
             except TadoDeviceFlowPending:
+                _LOGGER.debug("DomoLink-Tado: Device authorization still pending on Tado...")
                 errors["base"] = "authorization_pending"
             except TadoDeviceFlowExpired:
+                _LOGGER.warning("DomoLink-Tado: Device code expired or invalidated")
                 errors["base"] = "code_expired"
                 self._device_code = None  # Restart flow next time
             except (TadoAuthError, TadoError) as err:
-                _LOGGER.error("Error during Tado token polling: %s", err)
+                _LOGGER.error("DomoLink-Tado: Error during Tado token polling/login: %s", err)
                 errors["base"] = "cannot_connect"
+                self._device_code = None  # Reset so subsequent attempt generates a fresh code
             except Exception as err:
-                _LOGGER.exception("Unexpected error during Tado login: %s", err)
+                _LOGGER.exception("DomoLink-Tado: Unexpected error during Tado login: %s", err)
                 errors["base"] = "unknown"
+                self._device_code = None
 
         # If we do not have an active device code yet, request one
         if not self._device_code:
