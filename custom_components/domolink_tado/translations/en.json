@@ -5,6 +5,14 @@
         "title": "DomoLink-Tado Connection",
         "description": "Please link your Tado account using the official secure Device Flow protocol.\n\n1. Open the link: **{verification_uri}**\n2. Enter the following code if prompted: **{user_code}**\n3. Confirm access on your Tado account, then click the blue **Submit** button below."
       },
+      "reauth_confirm": {
+        "title": "Re-authenticate DomoLink-Tado",
+        "description": "Please renew your Tado authorization using the official secure Device Flow protocol.\n\n1. Open the link: **{verification_uri}**\n2. Enter the following code if prompted: **{user_code}**\n3. Confirm access on your Tado account, then click the blue **Submit** button below."
+      },
+      "reconfigure": {
+        "title": "Reconfigure DomoLink-Tado",
+        "description": "Please link your Tado account using the official secure Device Flow protocol.\n\n1. Open the link: **{verification_uri}**\n2. Enter the following code if prompted: **{user_code}**\n3. Confirm access on your Tado account, then click the blue **Submit** button below."
+      },
       "labels": {
         "title": "Room Labels & Tags",
         "description": "Assign custom labels/tags to your rooms to easily filter them on the dashboard (e.g. Ground Floor, Upstairs, Bedrooms, Living Rooms). Separate multiple tags with commas."
@@ -28,6 +36,7 @@
       "init": {
         "title": "DomoLink-Tado Settings",
         "data": {
+          "reauth_trigger": "🔑 Re-authenticate Tado account (generate new token)",
           "overlay_mode": "Default manual overlay termination rule",
           "overlay_duration": "Default manual timer duration (seconds)",
           "auto_window_enabled": "Open window detection: automatically turn off heating",
@@ -35,6 +44,10 @@
           "eco_temperature": "Global Eco mode target temperature (°C)",
           "adaptive_polling": "Smart adaptive polling (15s active heating, 60s idle)"
         }
+      },
+      "reauth_device": {
+        "title": "Renew Tado Token",
+        "description": "Please authorize DomoLink-Tado on your Tado account:\n\n1. Open link: **{verification_uri}**\n2. Enter code: **{user_code}**\n3. Authorize access then click **Submit** below."
       }
     }
   }

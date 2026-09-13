@@ -178,6 +178,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         labels = call.data.get("labels", {})
         await coordinator.async_save_room_labels(labels)
 
+    async def handle_reauthenticate(call: ServiceCall) -> None:
+        """Déclencher la ré-authentification Device Flow."""
+        _LOGGER.info("DomoLink-Tado: Lancement du flux de ré-authentification...")
+        hass.async_create_task(
+            hass.config_entries.flow.async_init(
+                DOMAIN,
+                context={"source": "reauth", "entry_id": entry.entry_id},
+                data=entry.data,
+            )
+        )
+
     if not hass.services.has_service(DOMAIN, "resume_all_schedules"):
         hass.services.async_register(DOMAIN, "resume_all_schedules", handle_resume_all)
     if not hass.services.has_service(DOMAIN, "set_all_off"):
@@ -194,6 +205,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_register(DOMAIN, "set_temperature_offset", handle_temp_offset)
     if not hass.services.has_service(DOMAIN, "save_room_labels"):
         hass.services.async_register(DOMAIN, "save_room_labels", handle_save_labels)
+    if not hass.services.has_service(DOMAIN, "reauthenticate"):
+        hass.services.async_register(DOMAIN, "reauthenticate", handle_reauthenticate)
 
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     return True

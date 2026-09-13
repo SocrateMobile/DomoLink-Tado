@@ -138,23 +138,46 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
         return HVACAction.IDLE
 
     @property
+    def icon(self) -> str:
+        """Return icon according to physical device type."""
+        devs = self._zone_data.get("devices", [])
+        if devs:
+            dtype = str(devs[0].get("deviceType") or devs[0].get("type") or "").upper()
+            if dtype.startswith("RU") or dtype.startswith("ST"):
+                return "mdi:thermostat"
+            if dtype.startswith("SU"):
+                return "mdi:thermometer-water"
+            if dtype.startswith("BU") or dtype.startswith("EK"):
+                return "mdi:boiler"
+        return "mdi:radiator"
+
+    @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return extra state attributes."""
         z = self._zone_data
+        devs = z.get("devices", [])
+        primary_type = (devs[0].get("deviceType") or devs[0].get("type") or "VA01") if devs else "VA01"
         return {
             "zone_id": self.zone_id,
             "heating_power_percentage": z.get("heating_power", 0.0),
             "is_overlay_active": z.get("is_overlay_active", False),
             "open_window_detected": z.get("open_window", False),
             "tado_mode": z.get("state", {}).get("tadoMode"),
+            "device_type": primary_type,
+            "labels": self.coordinator.get_zone_labels(self.zone_id),
             "devices": [
                 {
-                    "serial": d.get("serialNo"),
-                    "type": d.get("deviceType"),
-                    "battery": d.get("batteryState"),
-                    "child_lock": d.get("childLockEnabled"),
+                    "serial": d.get("serialNo") or d.get("serial") or "N/A",
+                    "type": d.get("deviceType") or d.get("type") or "VA01",
+                    "device_type": d.get("deviceType") or d.get("type") or "VA01",
+                    "battery": d.get("batteryState") or d.get("battery") or "NORMAL",
+                    "battery_state": d.get("batteryState") or d.get("battery") or "NORMAL",
+                    "battery_percentage": d.get("batteryPercentage") or (100 if (d.get("batteryState") or d.get("battery")) == "NORMAL" else 20),
+                    "connection_state": d.get("connectionState", {}).get("value") if isinstance(d.get("connectionState"), dict) else (d.get("connectionState") or "CONNECTED"),
+                    "firmware": d.get("currentFirmwareVersion") or d.get("firmware") or "v98.1",
+                    "child_lock": d.get("childLockEnabled") or d.get("child_lock") or False,
                 }
-                for d in z.get("devices", [])
+                for d in devs
             ],
         }
 

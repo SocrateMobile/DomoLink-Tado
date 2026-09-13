@@ -106,3 +106,8 @@ save_room_labels:
       selector:
         object:
 
+reauthenticate:
+  name: Ré-authentifier le compte Tado
+  description: Déclenche le flux de ré-authentification Device Flow pour renouveler le jeton de connexion Tado.
+
+
