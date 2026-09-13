@@ -4,12 +4,80 @@
  * grille des pièces, et modale immersive à couleur adaptative et jauge tactile verticale.
  */
 
+function interpolateColor(t) {
+  const val = parseFloat(t);
+  if (isNaN(val)) return { r: 100, g: 116, b: 139 };
+  const stops = [
+    { temp: 10.0, r: 2, g: 132, b: 199 },   // #0284c7 (Bleu froid)
+    { temp: 16.0, r: 5, g: 150, b: 105 },   // #059669 (Émeraude éco)
+    { temp: 18.0, r: 22, g: 163, b: 74 },   // #16a34a (Vert doux)
+    { temp: 19.5, r: 217, g: 119, b: 6 },   // #d97706 (Ambre confort)
+    { temp: 21.5, r: 234, g: 88, b: 12 },   // #ea580c (Orange chaud)
+    { temp: 24.0, r: 220, g: 38, b: 38 },   // #dc2626 (Rouge corail)
+    { temp: 28.0, r: 153, g: 27, b: 27 }    // #991b1b (Crimson)
+  ];
+  if (val <= stops[0].temp) return { r: stops[0].r, g: stops[0].g, b: stops[0].b };
+  if (val >= stops[stops.length - 1].temp) {
+    const last = stops[stops.length - 1];
+    return { r: last.r, g: last.g, b: last.b };
+  }
+  for (let i = 0; i < stops.length - 1; i++) {
+    const s1 = stops[i];
+    const s2 = stops[i + 1];
+    if (val >= s1.temp && val <= s2.temp) {
+      const factor = (val - s1.temp) / (s2.temp - s1.temp);
+      return {
+        r: Math.round(s1.r + (s2.r - s1.r) * factor),
+        g: Math.round(s1.g + (s2.g - s1.g) * factor),
+        b: Math.round(s1.b + (s2.b - s1.b) * factor),
+      };
+    }
+  }
+  return { r: 217, g: 119, b: 6 };
+}
+
+function getCardBackgroundStyle(zone) {
+  const isOff = zone.state === "off";
+  if (isOff) {
+    return {
+      background: "#192133",
+      borderColor: "rgba(255, 255, 255, 0.08)",
+      boxShadow: "0 6px 20px rgba(0, 0, 0, 0.25)",
+      accentColor: "#64748b",
+      glow: "rgba(100, 116, 139, 0.15)",
+    };
+  }
+
+  // Dégradé du bas vers le haut :
+  // En bas : température actuelle mesurée
+  // En haut : température cible
+  const curColor = interpolateColor(zone.current_temp);
+  const tgtColor = interpolateColor(zone.target_num);
+
+  const bg = `linear-gradient(to top, rgba(${curColor.r}, ${curColor.g}, ${curColor.b}, 0.50) 0%, rgba(${tgtColor.r}, ${tgtColor.g}, ${tgtColor.b}, 0.60) 100%), #131928`;
+  const border = `rgba(${tgtColor.r}, ${tgtColor.g}, ${tgtColor.b}, 0.55)`;
+  const shadow = `0 10px 28px rgba(0, 0, 0, 0.4), 0 0 20px rgba(${tgtColor.r}, ${tgtColor.g}, ${tgtColor.b}, 0.22)`;
+  const accent = `rgb(${tgtColor.r}, ${tgtColor.g}, ${tgtColor.b})`;
+  const glow = `rgba(${tgtColor.r}, ${tgtColor.g}, ${tgtColor.b}, 0.5)`;
+
+  return {
+    background: bg,
+    borderColor: border,
+    boxShadow: shadow,
+    accentColor: accent,
+    glow: glow,
+  };
+}
+
 class DomolinkTadoPanel extends HTMLElement {
   constructor() {
     super();
     this._initialized = false;
     this._activeModalZoneId = null;
+    this._activeModalZone = null;
     this._sliderDragActive = false;
+    this._cardsMap = new Map();
+    this._sliderDebounceTimer = null;
   }
 
   set panel(panel) {
@@ -104,24 +172,11 @@ class DomolinkTadoPanel extends HTMLElement {
         glow: "rgba(100, 116, 139, 0.3)",
       };
     }
-    if (targetNum < 18.0) {
-      return {
-        bg: "#065f46",
-        accent: "#10b981",
-        glow: "rgba(16, 185, 129, 0.4)",
-      };
-    }
-    if (targetNum <= 21.5) {
-      return {
-        bg: "#d97706",
-        accent: "#f59e0b",
-        glow: "rgba(245, 158, 11, 0.45)",
-      };
-    }
+    const c = interpolateColor(targetNum);
     return {
-      bg: "#b91c1c",
-      accent: "#ef4444",
-      glow: "rgba(239, 68, 68, 0.5)",
+      bg: `rgb(${Math.max(0, c.r - 25)}, ${Math.max(0, c.g - 25)}, ${Math.max(0, c.b - 25)})`,
+      accent: `rgb(${c.r}, ${c.g}, ${c.b})`,
+      glow: `rgba(${c.r}, ${c.g}, ${c.b}, 0.5)`,
     };
   }
 
@@ -251,23 +306,27 @@ class DomolinkTadoPanel extends HTMLElement {
         /* ── Room Cards ── */
         .room-card {
           background: #1a2236;
-          border-radius: 20px;
+          border-radius: 22px;
           padding: 18px;
           position: relative;
-          min-height: 200px;
+          min-height: 204px;
           display: flex;
           flex-direction: column;
           justify-content: space-between;
           cursor: pointer;
-          transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
-          border: 1px solid rgba(255, 255, 255, 0.06);
           user-select: none;
+          box-sizing: border-box;
+          contain: layout style;
+          will-change: transform, box-shadow, background;
+          backface-visibility: hidden;
+          transform: translateZ(0);
+          transition: transform 0.22s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.25s ease, border-color 0.25s ease, background 0.5s ease;
+          border: 1px solid rgba(255, 255, 255, 0.08);
         }
 
         .room-card:hover {
-          transform: translateY(-4px);
-          box-shadow: 0 12px 28px rgba(0, 0, 0, 0.4);
-          border-color: rgba(56, 189, 248, 0.35);
+          transform: translateY(-4px) translateZ(0);
+          box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5) !important;
         }
 
         .room-card-header {
@@ -588,34 +647,108 @@ class DomolinkTadoPanel extends HTMLElement {
           margin-top: 6px;
         }
 
-        .temp-adjust-buttons {
-          display: flex;
-          justify-content: center;
-          gap: 20px;
+        /* ── Modern Temperature Slider ── */
+        .temp-slider-container {
           margin-top: 14px;
+          width: 100%;
         }
 
-        .temp-adjust-btn {
-          width: 42px;
-          height: 42px;
+        .slider-controls-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          width: 100%;
+        }
+
+        .slider-step-btn {
+          width: 36px;
+          height: 36px;
           border-radius: 50%;
-          background: #f3f4f6;
-          border: 1px solid #e5e7eb;
-          color: #111827;
-          font-size: 22px;
+          background: #f1f5f9;
+          border: 1px solid #cbd5e1;
+          color: #0f172a;
+          font-size: 20px;
           font-weight: 700;
           display: flex;
           align-items: center;
           justify-content: center;
           cursor: pointer;
-          transition: all 0.2s ease;
+          transition: all 0.15s ease;
+          flex-shrink: 0;
+          user-select: none;
         }
 
-        .temp-adjust-btn:hover {
+        .slider-step-btn:hover {
           background: #0284c7;
-          color: white;
+          color: #ffffff;
           border-color: #0284c7;
           transform: scale(1.08);
+        }
+
+        .slider-step-btn:active {
+          transform: scale(0.94);
+        }
+
+        .slider-range-wrapper {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        .temp-range-slider {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 100%;
+          height: 10px;
+          border-radius: 6px;
+          background: linear-gradient(to right, #0284c7 0%, #059669 32%, #f59e0b 60%, #ef4444 100%);
+          outline: none;
+          cursor: grab;
+          margin: 8px 0 4px 0;
+          touch-action: pan-y;
+        }
+
+        .temp-range-slider:active {
+          cursor: grabbing;
+        }
+
+        .temp-range-slider::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 28px;
+          height: 28px;
+          border-radius: 50%;
+          background: #ffffff;
+          border: 4px solid #f59e0b;
+          box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
+          cursor: grab;
+          transition: transform 0.15s ease, border-color 0.2s ease;
+        }
+
+        .temp-range-slider:active::-webkit-slider-thumb {
+          transform: scale(1.15);
+          cursor: grabbing;
+        }
+
+        .temp-range-slider::-moz-range-thumb {
+          width: 28px;
+          height: 28px;
+          border-radius: 50%;
+          background: #ffffff;
+          border: 4px solid #f59e0b;
+          box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
+          cursor: grab;
+        }
+
+        .slider-scale-labels {
+          display: flex;
+          justify-content: space-between;
+          font-size: 10px;
+          font-weight: 700;
+          color: #94a3b8;
+          padding: 0 4px;
+          user-select: none;
         }
 
         /* ── Controls Capsule (OFF / AUTO / ON) ── */
@@ -792,9 +925,30 @@ class DomolinkTadoPanel extends HTMLElement {
               <div class="slider-pill-bar"></div>
               <div class="target-temp-big" id="modalTargetBig">19.5</div>
               <div class="target-consigne-label">CONSIGNE •</div>
-              <div class="temp-adjust-buttons">
-                <button class="temp-adjust-btn" id="btnTempMinus">−</button>
-                <button class="temp-adjust-btn" id="btnTempPlus">+</button>
+
+              <div class="temp-slider-container">
+                <div class="slider-controls-row">
+                  <button class="slider-step-btn" id="btnTempMinus" title="-0.5°C">−</button>
+                  <div class="slider-range-wrapper">
+                    <input
+                      type="range"
+                      class="temp-range-slider"
+                      id="modalTempSlider"
+                      min="5"
+                      max="30"
+                      step="0.5"
+                      value="20"
+                    />
+                    <div class="slider-scale-labels">
+                      <span>5°</span>
+                      <span>15°</span>
+                      <span>20°</span>
+                      <span>25°</span>
+                      <span>30°</span>
+                    </div>
+                  </div>
+                  <button class="slider-step-btn" id="btnTempPlus" title="+0.5°C">+</button>
+                </div>
               </div>
             </div>
           </div>
@@ -880,7 +1034,7 @@ class DomolinkTadoPanel extends HTMLElement {
       }
     });
 
-    // Réglage température dans la modale
+    // Réglage température dans la modale via boutons fins
     this.querySelector("#btnTempMinus")?.addEventListener("click", (e) => {
       e.stopPropagation();
       this._adjustModalTemp(-0.5);
@@ -890,6 +1044,86 @@ class DomolinkTadoPanel extends HTMLElement {
       e.stopPropagation();
       this._adjustModalTemp(0.5);
     });
+
+    // Curseur Slider tactile
+    const slider = this.querySelector("#modalTempSlider");
+    slider?.addEventListener("input", (e) => {
+      this._sliderDragActive = true;
+      const val = parseFloat(e.target.value);
+      if (this._activeModalZone) {
+        this._activeModalZone.target_num = val;
+        this._activeModalZone.target_temp = val.toFixed(1);
+        this._updateModalView(this._activeModalZone, false);
+      }
+
+      clearTimeout(this._sliderDebounceTimer);
+      this._sliderDebounceTimer = setTimeout(() => {
+        if (this._activeModalZone) {
+          this._callService("climate", "set_temperature", {
+            entity_id: this._activeModalZone.entity_id,
+            temperature: val,
+          });
+        }
+      }, 300);
+    });
+
+    slider?.addEventListener("change", (e) => {
+      clearTimeout(this._sliderDebounceTimer);
+      const val = parseFloat(e.target.value);
+      if (this._activeModalZone) {
+        this._activeModalZone.target_num = val;
+        this._activeModalZone.target_temp = val.toFixed(1);
+        this._callService("climate", "set_temperature", {
+          entity_id: this._activeModalZone.entity_id,
+          temperature: val,
+        });
+      }
+      setTimeout(() => {
+        this._sliderDragActive = false;
+      }, 400);
+    });
+
+    // Glissement tactile vertical sur la jauge du thermostat
+    const thermoCard = this.querySelector("#modalThermostatCard");
+    if (thermoCard) {
+      let isDragging = false;
+      const handleMove = (clientY) => {
+        const rect = thermoCard.getBoundingClientRect();
+        const rel = Math.max(0, Math.min(1, (clientY - rect.top) / rect.height));
+        // Haut = 30°C, Bas = 5°C
+        const raw = 30.0 - rel * 25.0;
+        const stepped = Math.max(5.0, Math.min(30.0, Math.round(raw * 2) / 2));
+        const s = this.querySelector("#modalTempSlider");
+        if (s && parseFloat(s.value) !== stepped) {
+          s.value = stepped;
+          s.dispatchEvent(new Event("input"));
+        }
+      };
+
+      thermoCard.addEventListener("pointerdown", (e) => {
+        if (e.target.closest(".temp-slider-container") || e.target.closest("button")) return;
+        isDragging = true;
+        try { thermoCard.setPointerCapture(e.pointerId); } catch (_) {}
+        handleMove(e.clientY);
+      });
+
+      thermoCard.addEventListener("pointermove", (e) => {
+        if (!isDragging) return;
+        handleMove(e.clientY);
+      });
+
+      const stopDrag = (e) => {
+        if (isDragging) {
+          isDragging = false;
+          try { thermoCard.releasePointerCapture(e.pointerId); } catch (_) {}
+          const s = this.querySelector("#modalTempSlider");
+          if (s) s.dispatchEvent(new Event("change"));
+        }
+      };
+
+      thermoCard.addEventListener("pointerup", stopDrag);
+      thermoCard.addEventListener("pointercancel", stopDrag);
+    }
 
     // Modes dans la modale
     this.querySelector("#modalModeOff")?.addEventListener("click", () => {
@@ -935,8 +1169,10 @@ class DomolinkTadoPanel extends HTMLElement {
     let target = this._activeModalZone.target_num || 20.0;
     target = Math.max(5.0, Math.min(30.0, Math.round((target + delta) * 2) / 2));
     this._activeModalZone.target_num = target;
-    this._updateModalView(this._activeModalZone);
+    this._activeModalZone.target_temp = target.toFixed(1);
+    this._updateModalView(this._activeModalZone, true);
 
+    clearTimeout(this._sliderDebounceTimer);
     this._callService("climate", "set_temperature", {
       entity_id: this._activeModalZone.entity_id,
       temperature: target,
@@ -946,7 +1182,7 @@ class DomolinkTadoPanel extends HTMLElement {
   _openModal(zone) {
     this._activeModalZone = zone;
     this._activeModalZoneId = zone.zone_id;
-    this._updateModalView(zone);
+    this._updateModalView(zone, true);
     const overlay = this.querySelector("#roomModalOverlay");
     if (overlay) overlay.classList.add("open");
   }
@@ -958,7 +1194,7 @@ class DomolinkTadoPanel extends HTMLElement {
     if (overlay) overlay.classList.remove("open");
   }
 
-  _updateModalView(z) {
+  _updateModalView(z, syncSlider = true) {
     if (!z) return;
     const card = this.querySelector("#roomModalCard");
     const colors = this._getTempColor(z.target_num, z.state);
@@ -978,6 +1214,14 @@ class DomolinkTadoPanel extends HTMLElement {
 
     const targetBigEl = this.querySelector("#modalTargetBig");
     if (targetBigEl) targetBigEl.textContent = z.state === "off" ? "OFF" : z.target_num.toFixed(1);
+
+    if (syncSlider) {
+      const slider = this.querySelector("#modalTempSlider");
+      if (slider) {
+        slider.value = z.target_num;
+        slider.disabled = (z.state === "off");
+      }
+    }
 
     // Modes actifs
     const btnOff = this.querySelector("#modalModeOff");
@@ -1019,77 +1263,97 @@ class DomolinkTadoPanel extends HTMLElement {
       summaryEl.textContent = `${data.zones.length} pièces • ${data.active_count} en chauffe active`;
     }
 
-    // Rafraîchir les cartes de pièces dans la grille
     const grid = this.querySelector("#tado-grid");
     if (!grid) return;
 
-    // Conserver la première tuile globale
-    const globalTile = grid.querySelector(".global-control-tile");
-    grid.innerHTML = "";
-    if (globalTile) grid.appendChild(globalTile);
-
-    for (const z of data.zones) {
-      const card = document.createElement("div");
-      card.className = "room-card";
-      card.dataset.zoneId = z.zone_id;
-
-      const colors = this._getTempColor(z.target_num, z.state);
-
-      card.innerHTML = `
-        <div class="room-card-header">
-          <span class="current-temp-label">${z.current_temp}°C</span>
-          <div class="room-indicators">
-            ${z.open_window ? `<span class="indicator-badge window">🪟 Ouverte</span>` : ""}
-            ${z.is_heating ? `<span class="indicator-badge flame">🔥 ${z.heating_power}%</span>` : ""}
-            ${z.child_locked ? `<span class="indicator-badge">🔒</span>` : ""}
-          </div>
-        </div>
-
-        <div class="room-dial-wrapper">
-          <div class="room-ring ${z.is_heating ? "active-heat" : ""}" style="border-color: ${colors.accent}; box-shadow: 0 0 14px ${colors.glow};">
-            <span class="room-ring-inner-icon">${z.is_heating ? "🔥" : "❄️"}</span>
-          </div>
-          <div class="room-name">${z.name}</div>
-          <div class="target-temp-label">Réglée sur ${z.target_temp}°</div>
-        </div>
-
-        <div class="room-card-actions">
-          <button class="room-action-btn btn-room-off" title="Éteindre">⏻</button>
-          <button class="room-action-btn btn-room-auto" title="Planning automatique">📅</button>
-          <button class="room-action-btn btn-room-heat" title="Chauffe manuelle">🔥</button>
-        </div>
-      `;
-
-      // Clic sur la carte -> ouvrir la modale
-      card.addEventListener("click", () => {
-        this._openModal(z);
-      });
-
-      // Actions rapides sans ouvrir la modale
-      card.querySelector(".btn-room-off")?.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this._callService("climate", "set_hvac_mode", { entity_id: z.entity_id, hvac_mode: "off" });
-      });
-
-      card.querySelector(".btn-room-auto")?.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this._callService("climate", "set_hvac_mode", { entity_id: z.entity_id, hvac_mode: "auto" });
-      });
-
-      card.querySelector(".btn-room-heat")?.addEventListener("click", (e) => {
-        e.stopPropagation();
-        this._callService("climate", "set_hvac_mode", { entity_id: z.entity_id, hvac_mode: "heat" });
-      });
-
-      grid.appendChild(card);
+    if (!this._cardsMap) {
+      this._cardsMap = new Map();
     }
 
-    // Si la modale est actuellement ouverte, rafraîchir son contenu
-    if (this._activeModalZoneId) {
-      const refreshedZone = data.zones.find((z) => z.zone_id === this._activeModalZoneId);
+    const currentZoneIds = new Set(data.zones.map((z) => String(z.zone_id)));
+
+    // Supprimer les cartes de pièces qui n'existent plus
+    for (const [zid, cardEl] of this._cardsMap.entries()) {
+      if (!currentZoneIds.has(zid)) {
+        cardEl.remove();
+        this._cardsMap.delete(zid);
+      }
+    }
+
+    // Mettre à jour ou créer les cartes en place
+    for (const z of data.zones) {
+      const zid = String(z.zone_id);
+      let card = this._cardsMap.get(zid);
+      const style = getCardBackgroundStyle(z);
+
+      if (!card) {
+        card = document.createElement("div");
+        card.className = "room-card";
+        card.dataset.zoneId = zid;
+        grid.appendChild(card);
+        this._cardsMap.set(zid, card);
+      }
+
+      // Appliquer le fond dégradé dynamique du bas (température actuelle) vers le haut (consigne)
+      card.style.background = style.background;
+      card.style.borderColor = style.borderColor;
+      card.style.boxShadow = style.boxShadow;
+
+      // Mettre à jour le contenu de la carte uniquement si les données changent pour éviter les re-renders inutiles
+      const sig = `${z.name}|${z.current_temp}|${z.target_temp}|${z.state}|${z.heating_power}|${z.open_window}|${z.child_locked}`;
+      if (card._sig !== sig) {
+        card._sig = sig;
+        card.innerHTML = `
+          <div class="room-card-header">
+            <span class="current-temp-label">${z.current_temp}°C</span>
+            <div class="room-indicators">
+              ${z.open_window ? `<span class="indicator-badge window">🪟 Ouverte</span>` : ""}
+              ${z.is_heating ? `<span class="indicator-badge flame">🔥 ${z.heating_power}%</span>` : ""}
+              ${z.child_locked ? `<span class="indicator-badge">🔒</span>` : ""}
+            </div>
+          </div>
+
+          <div class="room-dial-wrapper">
+            <div class="room-ring ${z.is_heating ? "active-heat" : ""}" style="border-color: ${style.accentColor}; box-shadow: 0 0 14px ${style.glow};">
+              <span class="room-ring-inner-icon">${z.is_heating ? "🔥" : (z.state === "off" ? "⏻" : "❄️")}</span>
+            </div>
+            <div class="room-name">${z.name}</div>
+            <div class="target-temp-label">${z.state === "off" ? "Éteinte" : `Réglée sur ${z.target_temp}°`}</div>
+          </div>
+
+          <div class="room-card-actions">
+            <button class="room-action-btn btn-room-off" title="Éteindre">⏻</button>
+            <button class="room-action-btn btn-room-auto" title="Planning automatique">📅</button>
+            <button class="room-action-btn btn-room-heat" title="Chauffe manuelle">🔥</button>
+          </div>
+        `;
+
+        card.querySelector(".btn-room-off")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this._callService("climate", "set_hvac_mode", { entity_id: z.entity_id, hvac_mode: "off" });
+        });
+
+        card.querySelector(".btn-room-auto")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this._callService("climate", "set_hvac_mode", { entity_id: z.entity_id, hvac_mode: "auto" });
+        });
+
+        card.querySelector(".btn-room-heat")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          this._callService("climate", "set_hvac_mode", { entity_id: z.entity_id, hvac_mode: "heat" });
+        });
+      }
+
+      // Conserver le gestionnaire de clic pour ouvrir la modale avec les données fraîches
+      card.onclick = () => this._openModal(z);
+    }
+
+    // Si la modale est actuellement ouverte et qu'on ne manipule pas le slider
+    if (this._activeModalZoneId && !this._sliderDragActive) {
+      const refreshedZone = data.zones.find((z) => String(z.zone_id) === String(this._activeModalZoneId));
       if (refreshedZone) {
         this._activeModalZone = refreshedZone;
-        this._updateModalView(refreshedZone);
+        this._updateModalView(refreshedZone, true);
       }
     }
   }
