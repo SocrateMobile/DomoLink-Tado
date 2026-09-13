@@ -1,0 +1,348 @@
+"""Asynchronous Tado API client with bulletproof OAuth2 Device Flow & token persistence."""
+from __future__ import annotations
+
+import asyncio
+from dataclasses import dataclass
+import logging
+import time
+from typing import Any, Callable, Coroutine
+
+import aiohttp
+
+from .const import (
+    OVERLAY_MANUAL,
+    OVERLAY_NEXT_TIME_BLOCK,
+    OVERLAY_TIMER,
+    TADO_API_BASE,
+    TADO_CLIENT_ID,
+    TADO_DEVICE_AUTH_URL,
+    TADO_SCOPE,
+    TADO_TOKEN_URL,
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class TadoError(Exception):
+    """Base exception for Tado client."""
+
+
+class TadoAuthError(TadoError):
+    """Exception raised when authentication fails."""
+
+
+class TadoDeviceFlowPending(TadoError):
+    """Exception raised when user has not yet authorized the device."""
+
+
+class TadoDeviceFlowExpired(TadoError):
+    """Exception raised when device code has expired."""
+
+
+@dataclass
+class TadoDeviceAuthResponse:
+    """Device authorization initiation response."""
+
+    device_code: str
+    user_code: str
+    verification_uri: str
+    verification_uri_complete: str | None
+    expires_in: int
+    interval: int
+
+
+class TadoClient:
+    """Asynchronous client for Tado API."""
+
+    def __init__(
+        self,
+        session: aiohttp.ClientSession,
+        access_token: str | None = None,
+        refresh_token: str | None = None,
+        expires_at: float = 0.0,
+        token_update_callback: Callable[[dict[str, Any]], Coroutine[Any, Any, None]] | None = None,
+    ) -> None:
+        self.session = session
+        self.access_token = access_token
+        self.refresh_token = refresh_token
+        self.expires_at = expires_at
+        self.token_update_callback = token_update_callback
+        self._refresh_lock = asyncio.Lock()
+
+    @staticmethod
+    async def request_device_code(session: aiohttp.ClientSession) -> TadoDeviceAuthResponse:
+        """Start the OAuth2 Device Authorization Flow with Tado."""
+        data = {
+            "client_id": TADO_CLIENT_ID,
+            "scope": TADO_SCOPE,
+        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+        try:
+            async with session.post(TADO_DEVICE_AUTH_URL, data=data, headers=headers) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    raise TadoAuthError(f"Device code request failed ({resp.status}): {text}")
+                res = await resp.json()
+                return TadoDeviceAuthResponse(
+                    device_code=res["device_code"],
+                    user_code=res["user_code"],
+                    verification_uri=res.get("verification_uri", "https://tado.com/device"),
+                    verification_uri_complete=res.get("verification_uri_complete"),
+                    expires_in=res.get("expires_in", 300),
+                    interval=res.get("interval", 5),
+                )
+        except aiohttp.ClientError as err:
+            raise TadoError(f"Network error during device code request: {err}") from err
+
+    @staticmethod
+    async def poll_device_token(session: aiohttp.ClientSession, device_code: str) -> dict[str, Any]:
+        """Poll the Tado token endpoint during device flow."""
+        data = {
+            "client_id": TADO_CLIENT_ID,
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            "device_code": device_code,
+        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+        async with session.post(TADO_TOKEN_URL, data=data, headers=headers) as resp:
+            if resp.status == 200:
+                res = await resp.json()
+                return {
+                    "access_token": res["access_token"],
+                    "refresh_token": res.get("refresh_token"),
+                    "expires_at": time.time() + res.get("expires_in", 3600),
+                }
+
+            res = await resp.json()
+            error = res.get("error")
+            if error in ("authorization_pending", "slow_down"):
+                raise TadoDeviceFlowPending(error)
+            if error in ("expired_token", "access_denied"):
+                raise TadoDeviceFlowExpired(error)
+
+            raise TadoAuthError(f"Token polling error ({resp.status}): {res.get('error_description', error)}")
+
+    async def async_get_valid_token(self) -> str:
+        """Ensure the current access token is valid, refreshing if needed."""
+        if self.access_token and time.time() < (self.expires_at - 120):
+            return self.access_token
+
+        async with self._refresh_lock:
+            # Check again inside the lock
+            if self.access_token and time.time() < (self.expires_at - 120):
+                return self.access_token
+
+            return await self.async_refresh_token()
+
+    async def async_refresh_token(self) -> str:
+        """Refresh the access token using the stored refresh token."""
+        if not self.refresh_token:
+            raise TadoAuthError("No refresh token available")
+
+        data = {
+            "client_id": TADO_CLIENT_ID,
+            "grant_type": "refresh_token",
+            "refresh_token": self.refresh_token,
+        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+
+        _LOGGER.debug("Refreshing Tado OAuth token...")
+        try:
+            async with self.session.post(TADO_TOKEN_URL, data=data, headers=headers) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    _LOGGER.error("Failed to refresh Tado token (%s): %s", resp.status, text)
+                    raise TadoAuthError(f"Token refresh failed ({resp.status}): {text}")
+
+                res = await resp.json()
+                self.access_token = res["access_token"]
+                self.refresh_token = res.get("refresh_token", self.refresh_token)
+                self.expires_at = time.time() + res.get("expires_in", 3600)
+
+                _LOGGER.info("Tado OAuth token refreshed successfully (valid for %ss)", res.get("expires_in"))
+
+                # Persist directly to Home Assistant config entry storage!
+                if self.token_update_callback:
+                    try:
+                        await self.token_update_callback(
+                            {
+                                "access_token": self.access_token,
+                                "refresh_token": self.refresh_token,
+                                "expires_at": self.expires_at,
+                            }
+                        )
+                    except Exception as err:
+                        _LOGGER.warning("Could not persist refreshed token to config entry: %s", err)
+
+                return self.access_token
+        except aiohttp.ClientError as err:
+            raise TadoError(f"Network error refreshing token: {err}") from err
+
+    async def _request(
+        self,
+        method: str,
+        endpoint: str,
+        json_data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        retry_auth: bool = True,
+    ) -> Any:
+        """Execute an authenticated request against the Tado API."""
+        token = await self.async_get_valid_token()
+        url = f"{TADO_API_BASE}/{endpoint.lstrip('/')}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        }
+
+        try:
+            async with self.session.request(
+                method, url, json=json_data, params=params, headers=headers
+            ) as resp:
+                if resp.status == 401 and retry_auth:
+                    _LOGGER.warning("Received 401 Unauthorized from Tado API, forcing token refresh...")
+                    await self.async_refresh_token()
+                    return await self._request(
+                        method, endpoint, json_data=json_data, params=params, retry_auth=False
+                    )
+
+                if resp.status == 204:
+                    return None
+
+                if resp.status not in (200, 201):
+                    text = await resp.text()
+                    raise TadoError(f"API request to {endpoint} failed ({resp.status}): {text}")
+
+                return await resp.json()
+        except aiohttp.ClientError as err:
+            raise TadoError(f"Network error requesting {endpoint}: {err}") from err
+
+    # ── High-level API endpoints ──────────────────────────────
+
+    async def get_me(self) -> dict[str, Any]:
+        """Fetch user profile and list of homes."""
+        return await self._request("GET", "/me")
+
+    async def get_home_info(self, home_id: int) -> dict[str, Any]:
+        """Fetch general information for a home."""
+        return await self._request("GET", f"/homes/{home_id}")
+
+    async def get_zones(self, home_id: int) -> list[dict[str, Any]]:
+        """Fetch all zones (rooms) in the home."""
+        return await self._request("GET", f"/homes/{home_id}/zones")
+
+    async def get_zone_states(self, home_id: int) -> dict[str, Any]:
+        """Fetch states of all zones in a single call (temperatures, heating power, overlays)."""
+        return await self._request("GET", f"/homes/{home_id}/zoneStates")
+
+    async def get_devices(self, home_id: int) -> list[dict[str, Any]]:
+        """Fetch all physical devices (Bridge, Radiator Valves, Thermostats)."""
+        return await self._request("GET", f"/homes/{home_id}/devices")
+
+    async def get_weather(self, home_id: int) -> dict[str, Any]:
+        """Fetch outdoor weather and temperature for the home."""
+        return await self._request("GET", f"/homes/{home_id}/weather")
+
+    async def get_home_state(self, home_id: int) -> dict[str, Any]:
+        """Fetch global home state (e.g. HOME vs AWAY)."""
+        return await self._request("GET", f"/homes/{home_id}/state")
+
+    async def set_zone_overlay(
+        self,
+        home_id: int,
+        zone_id: int,
+        target_temp: float | None = None,
+        power: str = "ON",
+        termination_type: str = OVERLAY_NEXT_TIME_BLOCK,
+        duration_seconds: int | None = None,
+    ) -> dict[str, Any]:
+        """Set a manual overlay (temperature / power) for a zone."""
+        setting: dict[str, Any] = {
+            "type": "HEATING",
+            "power": power.upper(),
+        }
+        if power.upper() == "ON" and target_temp is not None:
+            setting["temperature"] = {"celsius": round(float(target_temp), 1)}
+
+        termination: dict[str, Any] = {}
+        if termination_type == OVERLAY_NEXT_TIME_BLOCK:
+            termination["type"] = "TADO_MODE"
+        elif termination_type == OVERLAY_MANUAL:
+            termination["type"] = "MANUAL"
+        elif termination_type == OVERLAY_TIMER:
+            termination["type"] = "TIMER"
+            termination["durationInSeconds"] = duration_seconds or 3600
+        else:
+            termination["type"] = "TADO_MODE"
+
+        payload = {
+            "setting": setting,
+            "termination": termination,
+        }
+        _LOGGER.info(
+            "Setting overlay for zone %s in home %s: %s (%s)",
+            zone_id,
+            home_id,
+            payload,
+            termination_type,
+        )
+        return await self._request("PUT", f"/homes/{home_id}/zones/{zone_id}/overlay", json_data=payload)
+
+    async def resume_schedule(self, home_id: int, zone_id: int) -> None:
+        """Delete manual overlay for a zone to resume automatic schedule."""
+        _LOGGER.info("Resuming schedule for zone %s in home %s", zone_id, home_id)
+        await self._request("DELETE", f"/homes/{home_id}/zones/{zone_id}/overlay")
+
+    async def resume_all_schedules(self, home_id: int, zone_ids: list[int]) -> None:
+        """Resume automatic schedule across all specified zones."""
+        tasks = [self.resume_schedule(home_id, zid) for zid in zone_ids]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def set_all_off(self, home_id: int, zone_ids: list[int]) -> None:
+        """Turn off heating across all specified zones."""
+        tasks = [
+            self.set_zone_overlay(
+                home_id=home_id,
+                zone_id=zid,
+                power="OFF",
+                termination_type=OVERLAY_MANUAL,
+            )
+            for zid in zone_ids
+        ]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def set_boost(
+        self,
+        home_id: int,
+        zone_ids: list[int],
+        temp: float = 25.0,
+        duration_seconds: int = 1800,
+    ) -> None:
+        """Apply a temporary boost to all specified zones."""
+        tasks = [
+            self.set_zone_overlay(
+                home_id=home_id,
+                zone_id=zid,
+                target_temp=temp,
+                power="ON",
+                termination_type=OVERLAY_TIMER,
+                duration_seconds=duration_seconds,
+            )
+            for zid in zone_ids
+        ]
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def set_child_lock(self, device_serial: str, child_lock: bool) -> dict[str, Any]:
+        """Enable or disable physical child lock on a radiator valve."""
+        _LOGGER.info("Setting child lock to %s on device %s", child_lock, device_serial)
+        return await self._request(
+            "PUT",
+            f"/devices/{device_serial}/childLock",
+            json_data={"childLockEnabled": bool(child_lock)},
+        )
+
+    async def set_presence(self, home_id: int, home: bool) -> dict[str, Any]:
+        """Lock presence to HOME or AWAY."""
+        state = "HOME" if home else "AWAY"
+        _LOGGER.info("Locking home presence to %s for home %s", state, home_id)
+        return await self._request("PUT", f"/homes/{home_id}/presenceLock", json_data={"homePresence": state})

@@ -1,0 +1,60 @@
+resume_all_schedules:
+  name: Reprendre tous les plannings
+  description: Annule toutes les dérogations manuelles et réactive le planning automatique sur toutes les pièces.
+
+set_all_off:
+  name: Tout éteindre
+  description: Bascule toutes les pièces en mode hors-gel / éteint.
+
+set_boost:
+  name: Activer le Boost général
+  description: Active une température élevée temporaire sur toutes les pièces.
+  fields:
+    temperature:
+      name: Température cible
+      description: Température de consigne souhaitée pour le boost (°C).
+      default: 25.0
+      selector:
+        number:
+          min: 15.0
+          max: 30.0
+          step: 0.5
+          unit_of_measurement: "°C"
+    duration:
+      name: Durée (secondes)
+      description: Durée du boost en secondes (ex. 1800 pour 30 minutes).
+      default: 1800
+      selector:
+        number:
+          min: 300
+          max: 14400
+          step: 300
+          unit_of_measurement: "s"
+
+set_child_lock:
+  name: Sécurité enfant tête
+  description: Active ou désactive le verrouillage physique sur une tête thermostatique.
+  fields:
+    device_serial:
+      name: Numéro de série
+      description: Numéro de série Tado de la tête (ex. VA12345678).
+      required: true
+      selector:
+        text:
+    locked:
+      name: Verrouillé
+      description: Activer (vrai) ou désactiver (faux) le verrouillage.
+      default: true
+      selector:
+        boolean:
+
+set_presence:
+  name: Définir la présence
+  description: Bascule le domicile Tado en mode Domicile ou Absence.
+  fields:
+    home:
+      name: À la maison
+      description: Vrai pour Domicile, Faux pour Absence.
+      default: true
+      selector:
+        boolean:
