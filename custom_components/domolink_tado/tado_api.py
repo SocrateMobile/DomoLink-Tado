@@ -169,36 +169,47 @@ class TadoClient:
         }
 
         _LOGGER.debug("Refreshing Tado OAuth token...")
-        try:
-            async with self.session.post(TADO_TOKEN_URL, data=data, headers=headers) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    _LOGGER.error("Failed to refresh Tado token (%s): %s", resp.status, text)
-                    raise TadoAuthError(f"Token refresh failed ({resp.status}): {text}")
+        for attempt in range(3):
+            try:
+                async with self.session.post(TADO_TOKEN_URL, data=data, headers=headers) as resp:
+                    if resp.status == 429:
+                        wait_sec = 2.5 * (attempt + 1)
+                        _LOGGER.warning("Tado token refresh rate limited (429). Retrying in %.1fs...", wait_sec)
+                        await asyncio.sleep(wait_sec)
+                        continue
 
-                res = await resp.json()
-                self.access_token = res["access_token"]
-                self.refresh_token = res.get("refresh_token", self.refresh_token)
-                self.expires_at = time.time() + res.get("expires_in", 3600)
+                    if resp.status != 200:
+                        text = await resp.text()
+                        _LOGGER.error("Failed to refresh Tado token (%s): %s", resp.status, text)
+                        raise TadoAuthError(f"Token refresh failed ({resp.status}): {text}")
 
-                _LOGGER.info("Tado OAuth token refreshed successfully (valid for %ss)", res.get("expires_in"))
+                    res = await resp.json()
+                    self.access_token = res["access_token"]
+                    self.refresh_token = res.get("refresh_token", self.refresh_token)
+                    self.expires_at = time.time() + res.get("expires_in", 3600)
 
-                # Persist directly to Home Assistant config entry storage!
-                if self.token_update_callback:
-                    try:
-                        await self.token_update_callback(
-                            {
-                                "access_token": self.access_token,
-                                "refresh_token": self.refresh_token,
-                                "expires_at": self.expires_at,
-                            }
-                        )
-                    except Exception as err:
-                        _LOGGER.warning("Could not persist refreshed token to config entry: %s", err)
+                    _LOGGER.info("Tado OAuth token refreshed successfully (valid for %ss)", res.get("expires_in"))
 
-                return self.access_token
-        except aiohttp.ClientError as err:
-            raise TadoError(f"Network error refreshing token: {err}") from err
+                    # Persist directly to Home Assistant config entry storage!
+                    if self.token_update_callback:
+                        try:
+                            await self.token_update_callback(
+                                {
+                                    "access_token": self.access_token,
+                                    "refresh_token": self.refresh_token,
+                                    "expires_at": self.expires_at,
+                                }
+                            )
+                        except Exception as err:
+                            _LOGGER.warning("Could not persist refreshed token to config entry: %s", err)
+
+                    return self.access_token
+            except aiohttp.ClientError as err:
+                if attempt < 2:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                    continue
+                raise TadoError(f"Network error refreshing token: {err}") from err
+        raise TadoAuthError("Could not refresh token after multiple attempts (rate limit / server error)")
 
     async def _request(
         self,
@@ -208,7 +219,7 @@ class TadoClient:
         params: dict[str, Any] | None = None,
         retry_auth: bool = True,
     ) -> Any:
-        """Execute an authenticated request against the Tado API."""
+        """Execute an authenticated request against the Tado API with 429 rate limit backoff."""
         token = await self.async_get_valid_token()
         url = f"{TADO_API_BASE}/{endpoint.lstrip('/')}"
         headers = {
@@ -218,27 +229,43 @@ class TadoClient:
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         }
 
-        try:
-            async with self.session.request(
-                method, url, json=json_data, params=params, headers=headers
-            ) as resp:
-                if resp.status == 401 and retry_auth:
-                    _LOGGER.warning("Received 401 Unauthorized from Tado API, forcing token refresh...")
-                    await self.async_refresh_token()
-                    return await self._request(
-                        method, endpoint, json_data=json_data, params=params, retry_auth=False
-                    )
+        for attempt in range(3):
+            try:
+                async with self.session.request(
+                    method, url, json=json_data, params=params, headers=headers
+                ) as resp:
+                    if resp.status == 429:
+                        retry_after = resp.headers.get("Retry-After")
+                        wait_sec = float(retry_after) if retry_after and retry_after.isdigit() else (2.0 * (attempt + 1))
+                        _LOGGER.warning(
+                            "Tado API Rate Limit (429 Too Many Requests) sur %s. Attente de %.1fs (tentative %d/3)...",
+                            endpoint,
+                            wait_sec,
+                            attempt + 1,
+                        )
+                        await asyncio.sleep(wait_sec)
+                        continue
 
-                if resp.status == 204:
-                    return None
+                    if resp.status == 401 and retry_auth:
+                        _LOGGER.warning("Received 401 Unauthorized from Tado API, forcing token refresh...")
+                        await self.async_refresh_token()
+                        return await self._request(
+                            method, endpoint, json_data=json_data, params=params, retry_auth=False
+                        )
 
-                if resp.status not in (200, 201):
-                    text = await resp.text()
-                    raise TadoError(f"API request to {endpoint} failed ({resp.status}): {text}")
+                    if resp.status == 204:
+                        return None
 
-                return await resp.json()
-        except aiohttp.ClientError as err:
-            raise TadoError(f"Network error requesting {endpoint}: {err}") from err
+                    if resp.status not in (200, 201):
+                        text = await resp.text()
+                        raise TadoError(f"API request to {endpoint} failed ({resp.status}): {text}")
+
+                    return await resp.json()
+            except aiohttp.ClientError as err:
+                if attempt < 2:
+                    await asyncio.sleep(1.5 * (attempt + 1))
+                    continue
+                raise TadoError(f"Network error requesting {endpoint}: {err}") from err
 
     # ── High-level API endpoints ──────────────────────────────
 

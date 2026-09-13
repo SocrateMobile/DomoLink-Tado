@@ -5,6 +5,14 @@
         "title": "Connexion DomoLink-Tado",
         "description": "Veuillez associer votre compte Tado via le protocole officiel sécurisé Device Flow.\n\n1. Rendez-vous sur le lien : **{verification_uri}**\n2. Saisissez le code suivant si demandé : **{user_code}**\n3. Validez l'accès sur votre compte Tado, puis cliquez sur le bouton bleu **Valider** ci-dessous."
       },
+      "reauth_confirm": {
+        "title": "Ré-authentification DomoLink-Tado",
+        "description": "Veuillez renouveler l'association de votre compte Tado via le protocole officiel sécurisé Device Flow.\n\n1. Rendez-vous sur le lien : **{verification_uri}**\n2. Saisissez le code suivant si demandé : **{user_code}**\n3. Validez l'accès sur votre compte Tado, puis cliquez sur le bouton bleu **Valider** ci-dessous."
+      },
+      "reconfigure": {
+        "title": "Reconfiguration DomoLink-Tado",
+        "description": "Veuillez associer votre compte Tado via le protocole officiel sécurisé Device Flow.\n\n1. Rendez-vous sur le lien : **{verification_uri}**\n2. Saisissez le code suivant si demandé : **{user_code}**\n3. Validez l'accès sur votre compte Tado, puis cliquez sur le bouton bleu **Valider** ci-dessous."
+      },
       "labels": {
         "title": "Étiquettes des pièces (Labels)",
         "description": "Attribuez des étiquettes (tags) à vos pièces pour filtrer facilement le tableau de bord (ex: RDC, Étage, Chambres, Pièces de vie). Séparez par des virgules pour plusieurs étiquettes."
@@ -28,6 +36,7 @@
       "init": {
         "title": "Paramètres DomoLink-Tado",
         "data": {
+          "reauth_trigger": "🔑 Lancer une ré-authentification Tado (nouveau jeton)",
           "overlay_mode": "Règle de fin de consigne manuelle par défaut",
           "overlay_duration": "Durée de la minuterie manuelle (secondes)",
           "auto_window_enabled": "Détection fenêtre ouverte : coupure automatique du radiateur",
@@ -35,6 +44,10 @@
           "eco_temperature": "Température du mode Éco global (°C)",
           "adaptive_polling": "Polling adaptatif intelligent (15s en chauffe, 60s au repos)"
         }
+      },
+      "reauth_device": {
+        "title": "Renouvellement du jeton Tado",
+        "description": "Veuillez autoriser DomoLink-Tado sur votre compte Tado :\n\n1. Rendez-vous sur le lien : **{verification_uri}**\n2. Saisissez le code : **{user_code}**\n3. Validez l'accès puis cliquez sur le bouton bleu **Valider** ci-dessous."
       }
     }
   }

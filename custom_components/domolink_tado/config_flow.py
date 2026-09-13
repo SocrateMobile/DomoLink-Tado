@@ -233,10 +233,28 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_reauth(self, entry_data: dict[str, Any]) -> FlowResult:
-        """Handle re-authentication with Tado."""
-        self._reauth_entry = self.hass.config_entries.async_get_entry(self.context["entry_id"])
+        """Handle re-authentication request from Home Assistant."""
+        entry_id = self.context.get("entry_id")
+        if entry_id:
+            self._reauth_entry = self.hass.config_entries.async_get_entry(entry_id)
+        elif hasattr(self, "_get_reauth_entry"):
+            self._reauth_entry = self._get_reauth_entry()
         self._device_code = None
-        return await self.async_step_user()
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Confirm and start device flow for re-authentication."""
+        return await self.async_step_user(user_input)
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Handle reconfiguration request from Home Assistant UI."""
+        entry_id = self.context.get("entry_id")
+        if entry_id:
+            self._reauth_entry = self.hass.config_entries.async_get_entry(entry_id)
+        elif hasattr(self, "_get_reconfigure_entry"):
+            self._reauth_entry = self._get_reconfigure_entry()
+        self._device_code = None
+        return await self.async_step_user(user_input)
 
     @staticmethod
     @callback
@@ -246,23 +264,32 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
-    """Handle options for DomoLink-Tado."""
+    """Handle options for DomoLink-Tado with optional re-authentication trigger."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         self.config_entry = config_entry
+        self._device_code: str | None = None
+        self._user_code: str | None = None
+        self._verification_uri: str = "https://login.tado.com/oauth2/device"
+        self._verification_uri_complete: str | None = None
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Manage the options."""
         if user_input is not None:
+            if user_input.get("reauth_trigger"):
+                return await self.async_step_reauth_device()
+
             # Preserve existing options (e.g. labels if not in this form)
             current_options = dict(self.config_entry.options)
-            current_options.update(user_input)
+            clean_input = {k: v for k, v in user_input.items() if k != "reauth_trigger"}
+            current_options.update(clean_input)
             return self.async_create_entry(title="", data=current_options)
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
+                    vol.Optional("reauth_trigger", default=False): bool,
                     vol.Optional(
                         CONF_OVERLAY_MODE,
                         default=self.config_entry.options.get(CONF_OVERLAY_MODE, DEFAULT_OVERLAY_MODE),
@@ -305,4 +332,53 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
                     ): bool,
                 }
             ),
+        )
+
+    async def async_step_reauth_device(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Step to allow generating and validating a new token directly from options."""
+        session = async_get_clientsession(self.hass)
+        errors: dict[str, str] = {}
+
+        if user_input is not None and self._device_code:
+            try:
+                tokens = await TadoClient.poll_device_token(session, self._device_code)
+                _LOGGER.info("DomoLink-Tado: Re-auth token received via Options Flow")
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry,
+                    data={
+                        **self.config_entry.data,
+                        CONF_ACCESS_TOKEN: tokens["access_token"],
+                        CONF_REFRESH_TOKEN: tokens.get("refresh_token"),
+                        CONF_EXPIRES_AT: tokens["expires_at"],
+                    },
+                )
+                await self.hass.config_entries.async_reload(self.config_entry.entry_id)
+                return self.async_create_entry(title="", data=self.config_entry.options)
+            except TadoDeviceFlowPending:
+                errors["base"] = "authorization_pending"
+            except Exception as err:
+                _LOGGER.error("DomoLink-Tado: Re-auth error: %s", err)
+                errors["base"] = "cannot_connect"
+                self._device_code = None
+
+        if not self._device_code:
+            try:
+                auth_resp = await TadoClient.request_device_code(session)
+                self._device_code = auth_resp.device_code
+                self._user_code = auth_resp.user_code
+                self._verification_uri = auth_resp.verification_uri
+                self._verification_uri_complete = auth_resp.verification_uri_complete
+            except Exception as err:
+                _LOGGER.error("Could not start device flow in options: %s", err)
+                return self.async_abort(reason="cannot_start_flow")
+
+        link = self._verification_uri_complete or self._verification_uri
+        return self.async_show_form(
+            step_id="reauth_device",
+            description_placeholders={
+                "user_code": self._user_code or "",
+                "verification_uri": link,
+            },
+            data_schema=vol.Schema({}),
+            errors=errors,
         )

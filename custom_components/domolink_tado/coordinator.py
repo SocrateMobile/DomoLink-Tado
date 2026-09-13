@@ -8,6 +8,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -57,38 +58,55 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.home_id = home_id
         self.home_name = home_name
         self._zones_raw: list[dict[str, Any]] = []
+        self._devices_raw: list[dict[str, Any]] = []
+        self._last_discovery_time: float = 0.0
         self._open_window_handled: dict[int, bool] = {}
 
+    def get_zone_labels(self, zone_id: int | str) -> list[str]:
+        """Return configured labels for a given zone ID."""
+        labels_map = self.entry.options.get(CONF_ROOM_LABELS, {})
+        res = labels_map.get(str(zone_id), [])
+        if isinstance(res, str):
+            return [s.strip() for s in res.split(",") if s.strip()]
+        return res if isinstance(res, list) else []
+
     async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch all zones, zone states, devices, weather, and home state from Tado."""
+        """Fetch all zone states and weather with smart zones/devices metadata caching."""
         try:
-            # 1. Fetch zones metadata (cached / refreshed on each poll)
-            zones_task = self.client.get_zones(self.home_id)
+            now = time.time()
+            # Cache zones et matériel pendant 30 minutes pour éviter le rate limit Tado (429)
+            if not self._zones_raw or not self._devices_raw or (now - self._last_discovery_time > 1800):
+                try:
+                    _LOGGER.debug("DomoLink-Tado: Découverte complète des zones et équipements...")
+                    z_res, d_res = await asyncio.gather(
+                        self.client.get_zones(self.home_id),
+                        self.client.get_devices(self.home_id),
+                    )
+                    self._zones_raw = z_res or []
+                    self._devices_raw = d_res or []
+                    self._last_discovery_time = now
+                except Exception as err:
+                    _LOGGER.warning("DomoLink-Tado: Échec de rafraîchissement des zones/matériels (%s), utilisation du cache", err)
+                    if not self._zones_raw:
+                        raise
+
+            # En routine : seulement les requêtes d'états dynamiques légères
             states_task = self.client.get_zone_states(self.home_id)
-            devices_task = self.client.get_devices(self.home_id)
             weather_task = self.client.get_weather(self.home_id)
             home_state_task = self.client.get_home_state(self.home_id)
 
-            results = await asyncio.gather(
-                zones_task,
+            states_res, weather_res, home_state_res = await asyncio.gather(
                 states_task,
-                devices_task,
                 weather_task,
                 home_state_task,
                 return_exceptions=True,
             )
 
-            zones_res, states_res, devices_res, weather_res, home_state_res = results
-
-            if isinstance(zones_res, Exception):
-                raise zones_res
             if isinstance(states_res, Exception):
                 raise states_res
 
-            self._zones_raw = zones_res or []
             zone_states = (states_res or {}).get("zoneStates", {})
-
-            devices = devices_res if isinstance(devices_res, list) else []
+            devices = self._devices_raw if isinstance(self._devices_raw, list) else []
             weather = weather_res if isinstance(weather_res, dict) else {}
             home_state = home_state_res if isinstance(home_state_res, dict) else {}
 
@@ -238,14 +256,18 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             }
 
         except TadoAuthError as err:
-            _LOGGER.error("Authentication error while updating Tado data: %s", err)
-            raise UpdateFailed(f"Tado authentication failed: {err}") from err
+            _LOGGER.error("Erreur d'authentification auprès de Tado: %s", err)
+            raise ConfigEntryAuthFailed(f"Session Tado expirée: {err}") from err
         except TadoError as err:
-            _LOGGER.warning("Tado API error during coordinator update: %s", err)
-            raise UpdateFailed(f"Tado API error: {err}") from err
+            if self.data:
+                _LOGGER.warning("Erreur transitoire API Tado (%s). Conservation des dernières valeurs connues en cache.", err)
+                return self.data
+            raise UpdateFailed(f"Erreur API Tado: {err}") from err
         except Exception as err:
-            _LOGGER.exception("Unexpected error updating DomoLink-Tado data: %s", err)
-            raise UpdateFailed(f"Unexpected error: {err}") from err
+            if self.data:
+                _LOGGER.warning("Erreur inattendue lors de la mise à jour Tado (%s). Utilisation du cache.", err)
+                return self.data
+            raise UpdateFailed(f"Erreur inattendue: {err}") from err
 
     # ── Actions ───────────────────────────────────────────────
 
