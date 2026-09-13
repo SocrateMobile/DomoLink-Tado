@@ -3,11 +3,11 @@
     "step": {
       "user": {
         "title": "Connexion DomoLink-Tado",
-        "description": "Veuillez associer votre compte Tado via le protocole sécurisé Device Flow.\n\n1. Rendez-vous sur **{verification_uri}**\n2. Saisissez le code suivant : **{user_code}**\n3. Validez l'accès sur votre compte Tado, puis cliquez sur **Soumettre** ci-dessous."
+        "description": "Veuillez associer votre compte Tado via le protocole sécurisé Device Flow.\n\n1. Rendez-vous sur : **{verification_uri}**\n2. Saisissez le code suivant si demandé : **{user_code}**\n3. Validez l'accès sur votre compte Tado, puis cliquez sur **Soumettre** ci-dessous."
       }
     },
     "error": {
-      "authorization_pending": "Validation en attente sur tado.com/device. Veuillez valider le code et réessayer.",
+      "authorization_pending": "Validation en attente sur Tado. Veuillez valider le code sur la page web puis cliquer sur Soumettre.",
       "code_expired": "Le code a expiré. Un nouveau code a été généré, veuillez réessayer.",
       "cannot_connect": "Échec de connexion aux serveurs Tado.",
       "unknown": "Une erreur inattendue est survenue."

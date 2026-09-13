@@ -47,7 +47,7 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         self._device_code: str | None = None
         self._user_code: str | None = None
-        self._verification_uri: str = "https://tado.com/device"
+        self._verification_uri: str = "https://login.tado.com/oauth2/device"
         self._verification_uri_complete: str | None = None
         self._reauth_entry: config_entries.ConfigEntry | None = None
 
