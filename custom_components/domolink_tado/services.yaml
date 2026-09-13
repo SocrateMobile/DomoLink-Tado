@@ -58,3 +58,51 @@ set_presence:
       default: true
       selector:
         boolean:
+
+set_eco_all:
+  name: Activer le mode Éco global
+  description: Bascule l'ensemble des pièces sur la température économique configurée.
+  fields:
+    temperature:
+      name: Température Éco
+      description: Température cible optionnelle en °C (utilise la température des paramètres par défaut).
+      default: 17.0
+      selector:
+        number:
+          min: 5.0
+          max: 25.0
+          step: 0.5
+          unit_of_measurement: "°C"
+
+set_temperature_offset:
+  name: Calibrer la sonde de température
+  description: Ajuste l'offset de calibration d'une tête thermostatique ou d'un thermostat d'ambiance (-5.0°C à +5.0°C).
+  fields:
+    device_serial:
+      name: Numéro de série
+      description: Numéro de série de l'équipement Tado (ex. VA1234567890).
+      required: true
+      selector:
+        text:
+    offset:
+      name: Offset de calibration (°C)
+      description: Décalage de température en °C (ex. -1.2 ou +0.8).
+      required: true
+      selector:
+        number:
+          min: -5.0
+          max: 5.0
+          step: 0.1
+          unit_of_measurement: "°C"
+
+save_room_labels:
+  name: Sauvegarder les étiquettes des pièces
+  description: Met à jour les étiquettes personnalisées des pièces (utilisées pour filtrer le tableau de bord).
+  fields:
+    labels:
+      name: Étiquettes par pièce
+      description: Objet JSON associant l'ID de zone à une liste de tags (ex. {"1": ["RDC", "Salon"], "2": ["Étage"]}).
+      required: true
+      selector:
+        object:
+

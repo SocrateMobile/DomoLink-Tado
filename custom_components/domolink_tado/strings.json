@@ -4,6 +4,10 @@
       "user": {
         "title": "Connexion DomoLink-Tado",
         "description": "Veuillez associer votre compte Tado via le protocole officiel sécurisé Device Flow.\n\n1. Rendez-vous sur le lien : **{verification_uri}**\n2. Saisissez le code suivant si demandé : **{user_code}**\n3. Validez l'accès sur votre compte Tado, puis cliquez sur le bouton bleu **Valider** ci-dessous."
+      },
+      "labels": {
+        "title": "Étiquettes des pièces (Labels)",
+        "description": "Attribuez des étiquettes (tags) à vos pièces pour filtrer facilement le tableau de bord (ex: RDC, Étage, Chambres, Pièces de vie). Séparez par des virgules pour plusieurs étiquettes."
       }
     },
     "error": {
@@ -25,7 +29,11 @@
         "title": "Paramètres DomoLink-Tado",
         "data": {
           "overlay_mode": "Règle de fin de consigne manuelle par défaut",
-          "overlay_duration": "Durée de la minuterie manuelle (secondes)"
+          "overlay_duration": "Durée de la minuterie manuelle (secondes)",
+          "auto_window_enabled": "Détection fenêtre ouverte : coupure automatique du radiateur",
+          "auto_window_duration": "Durée de coupure lors d'une fenêtre ouverte (secondes)",
+          "eco_temperature": "Température du mode Éco global (°C)",
+          "adaptive_polling": "Polling adaptatif intelligent (15s en chauffe, 60s au repos)"
         }
       }
     }

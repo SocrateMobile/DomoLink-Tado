@@ -1,9 +1,15 @@
 /**
- * DomoLink-Tado — Panneau Tactile Haute Résolution
+ * DomoLink-Tado — Panneau Tactile Haute Résolution & Lovelace Card (v1.1.0)
  * Interface moderne inspirée de la suite DomoLink avec tuile globale 4 quadrants,
- * grille des pièces, et modale immersive à couleur adaptative et jauge tactile verticale.
+ * navigation par onglets (Domicile & Pièces / Paramètres & Calibration),
+ * filtrage par étiquettes (tags), icônes vectorielles Tado distinctives,
+ * modale immersive avec courbe 24h, sélecteur de durée de dérogation,
+ * et calibration thermique en direct des têtes et thermostats.
  */
 
+/* =========================================================================
+ * 🎨 INTERPOLATION COULEUR & DÉGRADÉS DYNAMIQUES
+ * ========================================================================= */
 function interpolateColor(t) {
   const val = parseFloat(t);
   if (isNaN(val)) return { r: 100, g: 116, b: 139 };
@@ -45,6 +51,7 @@ function getCardBackgroundStyle(zone) {
       boxShadow: "0 6px 20px rgba(0, 0, 0, 0.25)",
       accentColor: "#64748b",
       glow: "rgba(100, 116, 139, 0.15)",
+      rgb: "100, 116, 139",
     };
   }
 
@@ -66,18 +73,121 @@ function getCardBackgroundStyle(zone) {
     boxShadow: shadow,
     accentColor: accent,
     glow: glow,
+    rgb: `${tgtColor.r}, ${tgtColor.g}, ${tgtColor.b}`,
   };
 }
 
+/* =========================================================================
+ * ⚙️ ICÔNES VECTORIELLES STYLISÉES DOMOLINK-TADO
+ * ========================================================================= */
+function getDeviceTypeCategory(deviceType = "") {
+  const dt = String(deviceType).toUpperCase();
+  if (dt.startsWith("VA")) return "VALVE";
+  if (dt.startsWith("RU") || dt.startsWith("ST")) return "THERMOSTAT";
+  if (dt.startsWith("SU")) return "SENSOR";
+  if (dt.startsWith("BU") || dt.startsWith("EK") || dt.startsWith("BR")) return "BOILER";
+  if (dt.startsWith("GW") || dt.startsWith("IB") || dt.includes("BRIDGE")) return "BRIDGE";
+  return "VALVE";
+}
+
+function getValveSvg(size = 30, color = "currentColor") {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" class="tado-device-icon icon-valve">
+    <!-- Corps cylindrique horizontal de la tête -->
+    <rect x="14" y="11" width="27" height="26" rx="7" fill="${color}" fill-opacity="0.16" stroke="${color}" stroke-width="2.5"/>
+    <!-- Bague de serrage moletée pour radiateur -->
+    <path d="M7 15H14V33H7C5.89543 33 5 32.1046 5 31V17C5 15.8954 5.89543 15 7 15Z" fill="${color}" fill-opacity="0.38" stroke="${color}" stroke-width="2"/>
+    <line x1="10.5" y1="17" x2="10.5" y2="31" stroke="${color}" stroke-width="1.5" stroke-dasharray="2 2"/>
+    <!-- Matrice LED Tado sur le corps -->
+    <rect x="22" y="17" width="13" height="14" rx="3" fill="#090d16" stroke="${color}" stroke-width="1.2"/>
+    <circle cx="26" cy="22" r="1" fill="${color}"/>
+    <circle cx="29" cy="22" r="1" fill="${color}"/>
+    <circle cx="31" cy="22" r="1" fill="${color}"/>
+    <circle cx="26" cy="26" r="1" fill="${color}"/>
+    <circle cx="29" cy="26" r="1" fill="${color}"/>
+    <!-- Bouton frontal rotatif avec voyant -->
+    <circle cx="38" cy="24" r="2.5" fill="${color}"/>
+  </svg>`;
+}
+
+function getThermostatSvg(size = 30, color = "currentColor") {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" class="tado-device-icon icon-thermostat">
+    <!-- Boîtier mural carré galbé avec finition verre -->
+    <rect x="7" y="7" width="34" height="34" rx="9" fill="${color}" fill-opacity="0.16" stroke="${color}" stroke-width="2.5"/>
+    <!-- Anneau central de consigne numérique -->
+    <circle cx="24" cy="23" r="11" fill="#090d16" stroke="${color}" stroke-width="2"/>
+    <circle cx="24" cy="23" r="13" stroke="${color}" stroke-width="1" stroke-dasharray="2 2" opacity="0.65"/>
+    <text x="24" y="27" font-size="9" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-weight="900" fill="${color}" text-anchor="middle">20°</text>
+    <!-- Bouton tactile inférieur -->
+    <circle cx="24" cy="36" r="2" fill="${color}"/>
+  </svg>`;
+}
+
+function getSensorSvg(size = 30, color = "currentColor") {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" class="tado-device-icon icon-sensor">
+    <!-- Boîtier compact sonde sans fil -->
+    <rect x="10" y="10" width="28" height="28" rx="8" fill="${color}" fill-opacity="0.16" stroke="${color}" stroke-width="2.5"/>
+    <!-- Fentes d'aération hygrométrique -->
+    <line x1="17" y1="18" x2="31" y2="18" stroke="${color}" stroke-width="2" stroke-linecap="round"/>
+    <line x1="17" y1="23" x2="31" y2="23" stroke="${color}" stroke-width="2" stroke-linecap="round"/>
+    <line x1="17" y1="28" x2="26" y2="28" stroke="${color}" stroke-width="2" stroke-linecap="round"/>
+    <!-- Voyant micro LED -->
+    <circle cx="30" cy="28" r="1.5" fill="${color}"/>
+  </svg>`;
+}
+
+function getBoilerSvg(size = 30, color = "currentColor") {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" class="tado-device-icon icon-boiler">
+    <!-- Boîtier relais brûleur / Extension Kit -->
+    <rect x="8" y="8" width="32" height="32" rx="7" fill="${color}" fill-opacity="0.16" stroke="${color}" stroke-width="2.5"/>
+    <!-- Flamme LED centrale -->
+    <path d="M24 13C24 13 28.5 18.5 28.5 22.5C28.5 25.5 26.5 28 23.5 28C20 28 17.5 25.5 17.5 22.5C17.5 18.5 22 15 22 15C22 15 21 19 23.5 20.5C26 22 24 13 24 13Z" fill="${color}" fill-opacity="0.85"/>
+    <!-- Bornier inférieur à vis -->
+    <rect x="12" y="33" width="24" height="4" rx="2" fill="${color}" fill-opacity="0.4"/>
+    <circle cx="16" cy="35" r="1" fill="#ffffff"/>
+    <circle cx="24" cy="35" r="1" fill="#ffffff"/>
+    <circle cx="32" cy="35" r="1" fill="#ffffff"/>
+  </svg>`;
+}
+
+function getBridgeSvg(size = 30, color = "currentColor") {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" class="tado-device-icon icon-bridge">
+    <!-- Passerelle Internet Bridge -->
+    <rect x="9" y="12" width="30" height="24" rx="7" fill="${color}" fill-opacity="0.16" stroke="${color}" stroke-width="2.5"/>
+    <!-- Les 3 voyants caractéristiques Tado -->
+    <circle cx="17" cy="24" r="2.5" fill="${color}"/>
+    <circle cx="24" cy="24" r="2.5" fill="${color}"/>
+    <circle cx="31" cy="24" r="2.5" fill="${color}"/>
+    <!-- Connecteur Ethernet RJ45 -->
+    <path d="M19 36H29V39H19V36Z" fill="${color}" fill-opacity="0.45"/>
+  </svg>`;
+}
+
+function getDeviceSvg(deviceType = "VA", size = 30, color = "currentColor") {
+  const cat = getDeviceTypeCategory(deviceType);
+  if (cat === "THERMOSTAT") return getThermostatSvg(size, color);
+  if (cat === "SENSOR") return getSensorSvg(size, color);
+  if (cat === "BOILER") return getBoilerSvg(size, color);
+  if (cat === "BRIDGE") return getBridgeSvg(size, color);
+  return getValveSvg(size, color);
+}
+
+/* =========================================================================
+ * 📱 COMPOSANT PRINCIPAL : DOMOLINK-TADO
+ * ========================================================================= */
 class DomolinkTadoPanel extends HTMLElement {
   constructor() {
     super();
     this._initialized = false;
+    this._activeTab = "rooms"; // "rooms" ou "settings"
+    this._selectedLabel = "__ALL__";
     this._activeModalZoneId = null;
     this._activeModalZone = null;
     this._sliderDragActive = false;
+    this._selectedDuration = "NEXT_TIME_BLOCK";
     this._cardsMap = new Map();
     this._sliderDebounceTimer = null;
+    this._allLabels = new Set();
+    this._settingsDraft = {};
   }
 
   set panel(panel) {
@@ -93,6 +203,14 @@ class DomolinkTadoPanel extends HTMLElement {
     this._updateData();
   }
 
+  setConfig(config) {
+    this._config = config || {};
+  }
+
+  getCardSize() {
+    return 6;
+  }
+
   connectedCallback() {
     if (this._hass && !this._initialized) {
       this._initialized = true;
@@ -102,7 +220,7 @@ class DomolinkTadoPanel extends HTMLElement {
   }
 
   _extractData() {
-    if (!this._hass) return { zones: [], weather: {}, activeCount: 0 };
+    if (!this._hass) return { zones: [], allDevices: [], weather: {}, activeCount: 0, labels: [] };
     const states = this._hass.states;
 
     // Détecter toutes les entités climate de DomoLink-Tado ou tado
@@ -111,7 +229,9 @@ class DomolinkTadoPanel extends HTMLElement {
     );
 
     const zones = [];
+    const allDevices = [];
     let activeCount = 0;
+    const labelsSet = new Set();
 
     for (const key of climateKeys) {
       const entity = states[key];
@@ -131,6 +251,25 @@ class DomolinkTadoPanel extends HTMLElement {
       const openWindow = attrs.open_window_detected || false;
       const devices = attrs.devices || [];
       const childLocked = devices.some((d) => d.child_lock === true);
+      const labels = Array.isArray(attrs.labels) ? attrs.labels : [];
+      labels.forEach((l) => labelsSet.add(l));
+
+      // Type principal du premier matériel associé
+      const primaryDevice = devices[0] || {};
+      const primaryDeviceType = primaryDevice.device_type || primaryDevice.deviceType || "VA01";
+
+      for (const d of devices) {
+        allDevices.push({
+          serial: d.serial || d.serial_number || "N/A",
+          device_type: d.device_type || d.deviceType || "VA01",
+          current_firmware: d.current_firmware_version || d.firmware || "v98.1",
+          battery_state: d.battery_state || "NORMAL",
+          battery_percentage: d.battery_percentage != null ? `${d.battery_percentage}%` : (d.battery_state === "NORMAL" ? "100%" : "Faible"),
+          connection_state: d.connection_state?.value || "CONNECTED",
+          zone_name: name,
+          zone_id: zoneId,
+        });
+      }
 
       zones.push({
         entity_id: key,
@@ -146,21 +285,27 @@ class DomolinkTadoPanel extends HTMLElement {
         is_overlay: isOverlay,
         open_window: openWindow,
         child_locked: childLocked,
+        labels: labels,
         devices: devices,
+        primary_device_type: primaryDeviceType,
       });
     }
 
-    // Données météo Tado
+    // Données météo extérieure
     const outdoorSensor = Object.keys(states).find(
       (k) => k.includes("domolink_tado") && k.includes("outdoor_temp")
     );
     const outdoorVal = outdoorSensor && states[outdoorSensor]?.state;
     const outdoorTemp = outdoorVal && outdoorVal !== "unavailable" ? `${parseFloat(outdoorVal).toFixed(1)}°` : "--°";
 
+    this._allLabels = labelsSet;
+
     return {
       zones: zones,
+      allDevices: allDevices,
       outdoor_temp: outdoorTemp,
       active_count: activeCount,
+      labels: Array.from(labelsSet),
     };
   }
 
@@ -185,7 +330,7 @@ class DomolinkTadoPanel extends HTMLElement {
       <style>
         :host {
           display: block;
-          height: 100vh;
+          min-height: 100vh;
           width: 100%;
           background-color: #0b0f19;
           color: #ffffff;
@@ -200,12 +345,14 @@ class DomolinkTadoPanel extends HTMLElement {
           padding: 24px 28px 60px 28px;
         }
 
-        /* ── Top Bar ── */
+        /* ── Top Bar & Navigation Tabs ── */
         .tado-header {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          margin-bottom: 28px;
+          flex-wrap: wrap;
+          gap: 16px;
+          margin-bottom: 24px;
         }
 
         .tado-title-group {
@@ -250,21 +397,121 @@ class DomolinkTadoPanel extends HTMLElement {
           letter-spacing: 0.5px;
         }
 
+        /* Nav Tabs */
+        .tado-nav-tabs {
+          display: flex;
+          background: rgba(255, 255, 255, 0.06);
+          border-radius: 14px;
+          padding: 4px;
+          gap: 4px;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        .nav-tab-btn {
+          background: transparent;
+          border: none;
+          color: #94a3b8;
+          font-size: 13px;
+          font-weight: 700;
+          padding: 8px 18px;
+          border-radius: 10px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .nav-tab-btn:hover {
+          color: #ffffff;
+          background: rgba(255, 255, 255, 0.06);
+        }
+
+        .nav-tab-btn.active {
+          background: #0284c7;
+          color: #ffffff;
+          box-shadow: 0 2px 10px rgba(2, 132, 199, 0.4);
+        }
+
+        .header-stats-group {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+        }
+
+        .header-stat-badge {
+          background: #192038;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 12px;
+          padding: 6px 14px;
+          font-size: 13px;
+          font-weight: 700;
+          color: #ffffff;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+
+        /* ── Label Filters Bar ── */
+        .labels-filter-bar {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          overflow-x: auto;
+          padding-bottom: 16px;
+          margin-bottom: 8px;
+          scrollbar-width: thin;
+        }
+
+        .label-chip {
+          background: rgba(255, 255, 255, 0.06);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          color: #94a3b8;
+          padding: 6px 14px;
+          border-radius: 20px;
+          font-size: 12px;
+          font-weight: 700;
+          cursor: pointer;
+          white-space: nowrap;
+          transition: all 0.2s ease;
+          user-select: none;
+        }
+
+        .label-chip:hover {
+          background: rgba(255, 255, 255, 0.12);
+          color: #ffffff;
+        }
+
+        .label-chip.active {
+          background: #38bdf8;
+          color: #0b0f19;
+          border-color: #38bdf8;
+          box-shadow: 0 2px 12px rgba(56, 189, 248, 0.4);
+        }
+
+        /* ── Views (Rooms vs Settings) ── */
+        .tab-view {
+          display: none;
+        }
+        .tab-view.active-view {
+          display: block;
+        }
+
         /* ── Main Grid ── */
         .tado-dashboard-grid {
           display: grid;
-          grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+          grid-template-columns: repeat(auto-fill, minmax(285px, 1fr));
           gap: 20px;
         }
 
         /* ── 4-Quadrant Quick Tile ── */
         .global-control-tile {
           background: #192038;
-          border-radius: 20px;
+          border-radius: 24px;
           display: grid;
           grid-template-columns: 1fr 1fr;
           grid-template-rows: 1fr 1fr;
-          min-height: 200px;
+          min-height: 220px;
           overflow: hidden;
           box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
           border: 1px solid rgba(255, 255, 255, 0.06);
@@ -279,15 +526,16 @@ class DomolinkTadoPanel extends HTMLElement {
           background: transparent;
           border: none;
           color: #ffffff;
-          font-size: 13px;
-          font-weight: 700;
+          font-size: 12px;
+          font-weight: 800;
+          letter-spacing: 0.5px;
           cursor: pointer;
           transition: all 0.2s ease;
           user-select: none;
         }
 
         .quadrant-btn:hover {
-          background: rgba(255, 255, 255, 0.06);
+          background: rgba(255, 255, 255, 0.08);
         }
 
         .quadrant-btn:active {
@@ -295,21 +543,33 @@ class DomolinkTadoPanel extends HTMLElement {
         }
 
         .quadrant-btn svg, .quadrant-btn span.q-icon {
-          font-size: 22px;
+          font-size: 24px;
         }
 
         .quad-off { border-right: 1px solid rgba(255, 255, 255, 0.08); border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
         .quad-boost { border-bottom: 1px solid rgba(255, 255, 255, 0.08); }
-        .quad-prog { border-right: 1px solid rgba(255, 255, 255, 0.08); }
-        .quad-outdoor { pointer-events: none; }
+        .quad-eco { border-right: 1px solid rgba(255, 255, 255, 0.08); }
+        .quad-prog { }
+
+        /* ── Breathing Pulse Animation for Active Heating ── */
+        @keyframes tado-breathe {
+          0%, 100% {
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4), 0 0 10px var(--pulse-color);
+            border-color: rgba(var(--pulse-rgb), 0.45);
+          }
+          50% {
+            box-shadow: 0 12px 34px rgba(0, 0, 0, 0.55), 0 0 24px var(--pulse-color);
+            border-color: rgba(var(--pulse-rgb), 0.95);
+          }
+        }
 
         /* ── Room Cards ── */
         .room-card {
           background: #1a2236;
-          border-radius: 22px;
+          border-radius: 24px;
           padding: 18px;
           position: relative;
-          min-height: 204px;
+          min-height: 220px;
           display: flex;
           flex-direction: column;
           justify-content: space-between;
@@ -324,6 +584,10 @@ class DomolinkTadoPanel extends HTMLElement {
           border: 1px solid rgba(255, 255, 255, 0.08);
         }
 
+        .room-card.heating-pulse {
+          animation: tado-breathe 3.2s ease-in-out infinite;
+        }
+
         .room-card:hover {
           transform: translateY(-4px) translateZ(0);
           box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5) !important;
@@ -336,48 +600,52 @@ class DomolinkTadoPanel extends HTMLElement {
         }
 
         .current-temp-label {
-          font-size: 16px;
-          font-weight: 700;
-          color: rgba(255, 255, 255, 0.85);
+          font-size: 17px;
+          font-weight: 800;
+          color: rgba(255, 255, 255, 0.9);
+          letter-spacing: -0.3px;
         }
 
         .room-indicators {
           display: flex;
           align-items: center;
-          gap: 6px;
+          gap: 5px;
         }
 
         .indicator-badge {
           font-size: 11px;
-          padding: 2px 6px;
+          font-weight: 700;
+          padding: 3px 7px;
           border-radius: 6px;
           background: rgba(255, 255, 255, 0.08);
           color: rgba(255, 255, 255, 0.7);
         }
 
         .indicator-badge.flame {
-          background: rgba(239, 68, 68, 0.2);
+          background: rgba(239, 68, 68, 0.25);
           color: #ef4444;
+          border: 1px solid rgba(239, 68, 68, 0.4);
         }
 
         .indicator-badge.window {
-          background: rgba(56, 189, 248, 0.2);
+          background: rgba(56, 189, 248, 0.25);
           color: #38bdf8;
+          border: 1px solid rgba(56, 189, 248, 0.4);
         }
 
-        /* ── Center Dial ── */
+        /* ── Center Dial with Stylized Device Icon ── */
         .room-dial-wrapper {
           display: flex;
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          margin: 10px 0;
+          margin: 6px 0;
           position: relative;
         }
 
         .room-ring {
-          width: 82px;
-          height: 82px;
+          width: 84px;
+          height: 84px;
           border-radius: 50%;
           border: 5px solid rgba(255, 255, 255, 0.1);
           position: relative;
@@ -389,26 +657,76 @@ class DomolinkTadoPanel extends HTMLElement {
 
         .room-ring.active-heat {
           border-color: #f59e0b;
-          box-shadow: 0 0 18px rgba(245, 158, 11, 0.35);
-        }
-
-        .room-ring-inner-icon {
-          font-size: 24px;
-          opacity: 0.6;
+          box-shadow: 0 0 18px rgba(245, 158, 11, 0.4);
         }
 
         .room-name {
           font-size: 16px;
-          font-weight: 700;
-          margin-top: 10px;
+          font-weight: 800;
+          margin-top: 8px;
           text-align: center;
           color: #ffffff;
         }
 
-        .target-temp-label {
+        /* Labels badges under room name */
+        .room-labels-container {
+          display: flex;
+          gap: 4px;
+          flex-wrap: wrap;
+          justify-content: center;
+          margin-top: 4px;
+        }
+
+        .room-mini-label {
+          font-size: 9px;
+          font-weight: 700;
+          background: rgba(255, 255, 255, 0.1);
+          color: #cbd5e1;
+          padding: 1px 6px;
+          border-radius: 4px;
+          text-transform: uppercase;
+        }
+
+        /* Mini −/+ Quick Stepper on Card */
+        .room-quick-adjust {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 8px;
+          margin-top: 6px;
+        }
+
+        .quick-step-btn {
+          width: 26px;
+          height: 26px;
+          border-radius: 50%;
+          background: rgba(255, 255, 255, 0.12);
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          color: #ffffff;
+          font-size: 16px;
+          font-weight: 800;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          transition: all 0.15s ease;
+        }
+
+        .quick-step-btn:hover {
+          background: #0284c7;
+          border-color: #0284c7;
+          transform: scale(1.12);
+        }
+
+        .quick-step-btn:active {
+          transform: scale(0.92);
+        }
+
+        .quick-target-val {
           font-size: 13px;
-          color: rgba(255, 255, 255, 0.55);
-          margin-top: 2px;
+          font-weight: 700;
+          color: rgba(255, 255, 255, 0.7);
+          min-width: 50px;
           text-align: center;
         }
 
@@ -418,7 +736,7 @@ class DomolinkTadoPanel extends HTMLElement {
           align-items: center;
           justify-content: center;
           gap: 12px;
-          margin-top: 10px;
+          margin-top: 8px;
         }
 
         .room-action-btn {
@@ -442,7 +760,7 @@ class DomolinkTadoPanel extends HTMLElement {
           transform: scale(1.1);
         }
 
-        /* ── MODAL POPUP (Image 2) ── */
+        /* ── MODAL POPUP ── */
         .modal-overlay {
           position: fixed;
           top: 0;
@@ -450,7 +768,7 @@ class DomolinkTadoPanel extends HTMLElement {
           width: 100vw;
           height: 100vh;
           background: rgba(0, 0, 0, 0.75);
-          backdrop-filter: blur(8px);
+          backdrop-filter: blur(10px);
           z-index: 10000;
           display: flex;
           align-items: center;
@@ -466,38 +784,43 @@ class DomolinkTadoPanel extends HTMLElement {
         }
 
         .modal-card {
-          width: 90%;
-          max-width: 440px;
-          height: 92vh;
-          max-height: 860px;
-          border-radius: 44px;
-          padding: 24px 24px 30px 24px;
+          width: 92%;
+          max-width: 460px;
+          height: 94vh;
+          max-height: 890px;
+          border-radius: 40px;
+          padding: 22px 24px 26px 24px;
           box-sizing: border-box;
           display: flex;
           flex-direction: column;
           justify-content: space-between;
           position: relative;
-          box-shadow: 0 25px 60px rgba(0, 0, 0, 0.5);
+          box-shadow: 0 25px 60px rgba(0, 0, 0, 0.6);
           transition: background-color 0.4s ease;
-          overflow: hidden;
+          overflow-y: auto;
+          scrollbar-width: none;
+        }
+
+        .modal-card::-webkit-scrollbar {
+          display: none;
         }
 
         .modal-close-btn {
-          width: 44px;
-          height: 44px;
-          border-radius: 16px;
+          width: 40px;
+          height: 40px;
+          border-radius: 14px;
           background: rgba(255, 255, 255, 0.2);
           border: none;
           color: #ffffff;
           display: flex;
           align-items: center;
           justify-content: center;
-          font-size: 20px;
+          font-size: 18px;
           cursor: pointer;
           transition: all 0.2s ease;
           position: absolute;
-          top: 24px;
-          left: 24px;
+          top: 20px;
+          left: 20px;
           z-index: 10;
         }
 
@@ -508,11 +831,11 @@ class DomolinkTadoPanel extends HTMLElement {
 
         .modal-header-text {
           text-align: center;
-          margin-top: 6px;
+          margin-top: 4px;
         }
 
         .modal-room-title {
-          font-size: 26px;
+          font-size: 24px;
           font-weight: 800;
           color: #ffffff;
           margin: 0;
@@ -531,24 +854,24 @@ class DomolinkTadoPanel extends HTMLElement {
           gap: 6px;
         }
 
-        /* ── Top Stat Capsules ── */
+        /* Top Stat Capsules */
         .modal-capsules-grid {
           display: grid;
           grid-template-columns: 1fr 1fr;
-          gap: 14px;
-          margin-top: 18px;
+          gap: 12px;
+          margin-top: 14px;
         }
 
         .stat-capsule {
-          background: rgba(0, 0, 0, 0.16);
-          border-radius: 24px;
-          padding: 16px 12px;
+          background: rgba(0, 0, 0, 0.18);
+          border-radius: 20px;
+          padding: 12px 10px;
           text-align: center;
           border: 1px solid rgba(255, 255, 255, 0.08);
         }
 
         .stat-capsule-label {
-          font-size: 10px;
+          font-size: 9px;
           font-weight: 800;
           letter-spacing: 1.5px;
           text-transform: uppercase;
@@ -556,18 +879,43 @@ class DomolinkTadoPanel extends HTMLElement {
         }
 
         .stat-capsule-val {
-          font-size: 28px;
+          font-size: 24px;
           font-weight: 800;
           color: #ffffff;
           margin-top: 2px;
         }
 
-        /* ── Central Graduated Thermostat Slider ── */
+        /* 24h Temperature Sparkline */
+        .modal-sparkline-card {
+          background: rgba(0, 0, 0, 0.16);
+          border-radius: 18px;
+          padding: 10px 14px;
+          margin-top: 10px;
+          border: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .sparkline-header {
+          display: flex;
+          justify-content: space-between;
+          font-size: 10px;
+          font-weight: 800;
+          letter-spacing: 1px;
+          color: rgba(255, 255, 255, 0.6);
+          margin-bottom: 4px;
+        }
+
+        .sparkline-svg {
+          width: 100%;
+          height: 42px;
+          overflow: visible;
+        }
+
+        /* Central Graduated Thermostat Slider */
         .thermostat-vertical-card {
           background: rgba(0, 0, 0, 0.14);
-          border-radius: 36px;
-          padding: 20px 16px;
-          margin: 14px 0;
+          border-radius: 32px;
+          padding: 16px 14px;
+          margin: 10px 0;
           display: flex;
           flex-direction: column;
           align-items: center;
@@ -584,10 +932,10 @@ class DomolinkTadoPanel extends HTMLElement {
           flex-direction: column;
           justify-content: space-between;
           position: absolute;
-          top: 24px;
-          bottom: 120px;
-          left: 20px;
-          right: 20px;
+          top: 20px;
+          bottom: 110px;
+          left: 18px;
+          right: 18px;
           pointer-events: none;
           box-sizing: border-box;
           opacity: 0.35;
@@ -608,12 +956,11 @@ class DomolinkTadoPanel extends HTMLElement {
           background: rgba(255, 255, 255, 0.35);
         }
 
-        /* White inner box with big readout */
         .thermostat-white-box {
           background: #ffffff;
-          border-radius: 30px;
-          width: 88%;
-          padding: 24px 20px;
+          border-radius: 28px;
+          width: 90%;
+          padding: 18px 16px;
           text-align: center;
           box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
           position: relative;
@@ -623,15 +970,15 @@ class DomolinkTadoPanel extends HTMLElement {
         }
 
         .slider-pill-bar {
-          width: 44px;
-          height: 5px;
+          width: 40px;
+          height: 4px;
           background: #d1d5db;
           border-radius: 10px;
-          margin: 0 auto 12px auto;
+          margin: 0 auto 10px auto;
         }
 
         .target-temp-big {
-          font-size: 58px;
+          font-size: 52px;
           font-weight: 900;
           color: #000000;
           letter-spacing: -2px;
@@ -639,35 +986,34 @@ class DomolinkTadoPanel extends HTMLElement {
         }
 
         .target-consigne-label {
-          font-size: 11px;
+          font-size: 10px;
           font-weight: 800;
           letter-spacing: 2px;
           text-transform: uppercase;
           color: #6b7280;
-          margin-top: 6px;
+          margin-top: 4px;
         }
 
-        /* ── Modern Temperature Slider ── */
         .temp-slider-container {
-          margin-top: 14px;
+          margin-top: 10px;
           width: 100%;
         }
 
         .slider-controls-row {
           display: flex;
           align-items: center;
-          gap: 10px;
+          gap: 8px;
           width: 100%;
         }
 
         .slider-step-btn {
-          width: 36px;
-          height: 36px;
+          width: 34px;
+          height: 34px;
           border-radius: 50%;
           background: #f1f5f9;
           border: 1px solid #cbd5e1;
           color: #0f172a;
-          font-size: 20px;
+          font-size: 18px;
           font-weight: 700;
           display: flex;
           align-items: center;
@@ -685,55 +1031,42 @@ class DomolinkTadoPanel extends HTMLElement {
           transform: scale(1.08);
         }
 
-        .slider-step-btn:active {
-          transform: scale(0.94);
-        }
-
         .slider-range-wrapper {
           flex: 1;
           display: flex;
           flex-direction: column;
-          gap: 4px;
+          gap: 2px;
         }
 
         .temp-range-slider {
           -webkit-appearance: none;
           appearance: none;
           width: 100%;
-          height: 10px;
+          height: 8px;
           border-radius: 6px;
           background: linear-gradient(to right, #0284c7 0%, #059669 32%, #f59e0b 60%, #ef4444 100%);
           outline: none;
           cursor: grab;
-          margin: 8px 0 4px 0;
+          margin: 6px 0 2px 0;
           touch-action: pan-y;
-        }
-
-        .temp-range-slider:active {
-          cursor: grabbing;
         }
 
         .temp-range-slider::-webkit-slider-thumb {
           -webkit-appearance: none;
           appearance: none;
-          width: 28px;
-          height: 28px;
+          width: 26px;
+          height: 26px;
           border-radius: 50%;
           background: #ffffff;
           border: 4px solid #f59e0b;
           box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35);
           cursor: grab;
-          transition: transform 0.15s ease, border-color 0.2s ease;
-        }
-
-        .temp-range-slider:active::-webkit-slider-thumb {
-          transform: scale(1.15);
-          cursor: grabbing;
+          transition: transform 0.15s ease;
         }
 
         .temp-range-slider::-moz-range-thumb {
-          width: 28px;
-          height: 28px;
+          width: 26px;
+          height: 26px;
           border-radius: 50%;
           background: #ffffff;
           border: 4px solid #f59e0b;
@@ -744,22 +1077,55 @@ class DomolinkTadoPanel extends HTMLElement {
         .slider-scale-labels {
           display: flex;
           justify-content: space-between;
-          font-size: 10px;
+          font-size: 9px;
           font-weight: 700;
           color: #94a3b8;
           padding: 0 4px;
-          user-select: none;
         }
 
-        /* ── Controls Capsule (OFF / AUTO / ON) ── */
+        /* Overlay Duration Selector Pills */
+        .duration-selector-row {
+          display: flex;
+          gap: 6px;
+          justify-content: center;
+          flex-wrap: wrap;
+          margin: 6px 0;
+        }
+
+        .duration-pill {
+          background: rgba(255, 255, 255, 0.08);
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          color: rgba(255, 255, 255, 0.7);
+          padding: 4px 10px;
+          border-radius: 12px;
+          font-size: 10px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.15s ease;
+        }
+
+        .duration-pill:hover {
+          background: rgba(255, 255, 255, 0.18);
+          color: #ffffff;
+        }
+
+        .duration-pill.active {
+          background: #0284c7;
+          border-color: #0284c7;
+          color: #ffffff;
+          box-shadow: 0 2px 8px rgba(2, 132, 199, 0.4);
+        }
+
+        /* Controls Capsule (OFF / AUTO / ON) */
         .mode-controls-capsule {
           background: rgba(0, 0, 0, 0.16);
-          border-radius: 28px;
-          padding: 8px 12px;
+          border-radius: 24px;
+          padding: 6px 10px;
           display: flex;
           align-items: center;
           justify-content: space-around;
           border: 1px solid rgba(255, 255, 255, 0.08);
+          margin-top: 6px;
         }
 
         .mode-btn {
@@ -767,7 +1133,7 @@ class DomolinkTadoPanel extends HTMLElement {
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          gap: 4px;
+          gap: 3px;
           background: transparent;
           border: none;
           color: rgba(255, 255, 255, 0.7);
@@ -775,8 +1141,8 @@ class DomolinkTadoPanel extends HTMLElement {
           font-weight: 800;
           letter-spacing: 1px;
           text-transform: uppercase;
-          padding: 8px 16px;
-          border-radius: 18px;
+          padding: 6px 14px;
+          border-radius: 16px;
           cursor: pointer;
           transition: all 0.2s ease;
         }
@@ -786,23 +1152,18 @@ class DomolinkTadoPanel extends HTMLElement {
           color: #ffffff;
         }
 
-        .mode-btn:hover {
-          color: #ffffff;
-          transform: scale(1.05);
-        }
-
-        /* ── Bottom Pills: Puissance & Sécurité ── */
+        /* Bottom Pills: Puissance & Sécurité */
         .modal-bottom-pills {
           display: grid;
           grid-template-columns: 1fr 1fr;
-          gap: 14px;
-          margin-top: 10px;
+          gap: 12px;
+          margin-top: 8px;
         }
 
         .footer-pill {
           background: rgba(0, 0, 0, 0.16);
-          border-radius: 22px;
-          padding: 12px 16px;
+          border-radius: 20px;
+          padding: 10px 14px;
           display: flex;
           align-items: center;
           gap: 10px;
@@ -823,7 +1184,7 @@ class DomolinkTadoPanel extends HTMLElement {
         }
 
         .footer-pill-icon {
-          font-size: 20px;
+          font-size: 18px;
         }
 
         .footer-pill-text {
@@ -832,7 +1193,7 @@ class DomolinkTadoPanel extends HTMLElement {
         }
 
         .footer-pill-label {
-          font-size: 9px;
+          font-size: 8px;
           font-weight: 800;
           letter-spacing: 1.5px;
           text-transform: uppercase;
@@ -840,8 +1201,295 @@ class DomolinkTadoPanel extends HTMLElement {
         }
 
         .footer-pill-val {
+          font-size: 13px;
+          font-weight: 800;
+        }
+
+        /* ── SETTINGS VIEW STYLES ── */
+        .settings-view-container {
+          display: flex;
+          flex-direction: column;
+          gap: 24px;
+        }
+
+        .settings-card {
+          background: #192038;
+          border-radius: 24px;
+          padding: 24px 28px;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        }
+
+        .settings-card-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-bottom: 20px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+          padding-bottom: 14px;
+        }
+
+        .settings-card-title {
+          font-size: 18px;
+          font-weight: 800;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin: 0;
+        }
+
+        .settings-card-desc {
+          font-size: 13px;
+          color: #94a3b8;
+          margin: 4px 0 0 0;
+        }
+
+        .settings-grid-form {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+          gap: 20px;
+        }
+
+        .form-group {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+
+        .form-label {
+          font-size: 13px;
+          font-weight: 700;
+          color: #e2e8f0;
+        }
+
+        .form-desc {
+          font-size: 11px;
+          color: #94a3b8;
+        }
+
+        .form-input, .form-select {
+          background: #0f172a;
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          border-radius: 12px;
+          padding: 10px 14px;
+          color: #ffffff;
+          font-size: 13px;
+          outline: none;
+          transition: border-color 0.2s ease;
+        }
+
+        .form-input:focus, .form-select:focus {
+          border-color: #38bdf8;
+        }
+
+        .form-toggle-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          padding: 10px 0;
+        }
+
+        /* Toggle switch */
+        .switch {
+          position: relative;
+          display: inline-block;
+          width: 46px;
+          height: 26px;
+        }
+
+        .switch input {
+          opacity: 0;
+          width: 0;
+          height: 0;
+        }
+
+        .slider-round {
+          position: absolute;
+          cursor: pointer;
+          top: 0; left: 0; right: 0; bottom: 0;
+          background-color: #334155;
+          transition: 0.3s;
+          border-radius: 34px;
+        }
+
+        .slider-round:before {
+          position: absolute;
+          content: "";
+          height: 20px;
+          width: 20px;
+          left: 3px;
+          bottom: 3px;
+          background-color: white;
+          transition: 0.3s;
+          border-radius: 50%;
+        }
+
+        input:checked + .slider-round {
+          background-color: #0284c7;
+        }
+
+        input:checked + .slider-round:before {
+          transform: translateX(20px);
+        }
+
+        /* Room Labels Table in Settings */
+        .room-labels-list {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        .room-label-item {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          background: #0f172a;
+          border-radius: 14px;
+          padding: 12px 18px;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          gap: 16px;
+          flex-wrap: wrap;
+        }
+
+        .room-label-item-left {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          min-width: 180px;
+        }
+
+        .room-label-item-name {
+          font-weight: 800;
+          font-size: 14px;
+        }
+
+        .room-tags-editor {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex: 1;
+          flex-wrap: wrap;
+        }
+
+        .tag-pill-badge {
+          background: rgba(56, 189, 248, 0.15);
+          color: #38bdf8;
+          border: 1px solid rgba(56, 189, 248, 0.3);
+          padding: 4px 10px;
+          border-radius: 20px;
+          font-size: 11px;
+          font-weight: 700;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+
+        .tag-remove-btn {
+          cursor: pointer;
+          opacity: 0.7;
+          font-size: 13px;
+        }
+        .tag-remove-btn:hover {
+          opacity: 1;
+          color: #ef4444;
+        }
+
+        .add-tag-input {
+          background: #1e293b;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 10px;
+          padding: 6px 10px;
+          color: #ffffff;
+          font-size: 11px;
+          outline: none;
+          width: 130px;
+        }
+
+        .btn-add-tag {
+          background: #0284c7;
+          border: none;
+          color: #ffffff;
+          border-radius: 10px;
+          padding: 6px 12px;
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+        }
+
+        /* Calibration Table */
+        .calibration-table {
+          width: 100%;
+          border-collapse: collapse;
+          font-size: 13px;
+        }
+
+        .calibration-table th {
+          text-align: left;
+          padding: 10px 14px;
+          color: #94a3b8;
+          font-weight: 700;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .calibration-table td {
+          padding: 12px 14px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+          vertical-align: middle;
+        }
+
+        .calibration-stepper {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .calib-val-badge {
+          font-family: monospace;
+          font-size: 13px;
+          font-weight: 800;
+          min-width: 52px;
+          text-align: center;
+          background: #0f172a;
+          padding: 4px 8px;
+          border-radius: 6px;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .btn-apply-offset {
+          background: #10b981;
+          border: none;
+          color: #ffffff;
+          padding: 5px 12px;
+          border-radius: 8px;
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.15s ease;
+        }
+
+        .btn-apply-offset:hover {
+          background: #059669;
+          transform: scale(1.05);
+        }
+
+        .btn-save-all {
+          background: linear-gradient(135deg, #0284c7, #2563eb);
+          border: none;
+          color: #ffffff;
+          padding: 12px 28px;
+          border-radius: 14px;
           font-size: 14px;
           font-weight: 800;
+          cursor: pointer;
+          box-shadow: 0 4px 14px rgba(37, 99, 235, 0.4);
+          transition: all 0.2s ease;
+          align-self: flex-start;
+          margin-top: 10px;
+        }
+
+        .btn-save-all:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 6px 20px rgba(37, 99, 235, 0.6);
         }
       </style>
 
@@ -853,42 +1501,215 @@ class DomolinkTadoPanel extends HTMLElement {
             <div>
               <h1 class="domolink-tado-title">
                 DomoLink-Tado
-                <span class="tado-badge-pill">Enghien</span>
+                <span class="tado-badge-pill" id="headerHomeBadge">Enghien</span>
               </h1>
             </div>
           </div>
-          <div class="tado-indicators" id="tado-summary-text" style="font-size: 13px; color: #94a3b8; font-weight: 600;">
-            Synchronisation en direct
+
+          <!-- Navigation Tabs -->
+          <div class="tado-nav-tabs">
+            <button class="nav-tab-btn active" id="tabBtnRooms">
+              <span>🏠</span> Domicile & Pièces
+            </button>
+            <button class="nav-tab-btn" id="tabBtnSettings">
+              <span>⚙️</span> Paramètres & Configuration
+            </button>
+          </div>
+
+          <!-- Quick Indicators -->
+          <div class="header-stats-group">
+            <div class="header-stat-badge" id="outdoorBadge">
+              <span>🌡️</span>
+              <span id="outdoor-temp-display">--° EXT</span>
+            </div>
+            <div class="header-stat-badge" id="activeHeatingBadge">
+              <span>🔥</span>
+              <span id="active-heating-count">0 en chauffe</span>
+            </div>
           </div>
         </div>
 
-        <!-- MAIN DASHBOARD GRID -->
-        <div class="tado-dashboard-grid" id="tado-grid">
-          <!-- Carte 4 quadrants globale -->
-          <div class="global-control-tile">
-            <button class="quadrant-btn quad-off" id="btn-global-off">
-              <span class="q-icon">⏻</span>
-              <span>OFF</span>
-            </button>
-            <button class="quadrant-btn quad-boost" id="btn-global-boost">
-              <span class="q-icon">🔥</span>
-              <span>BOOST</span>
-            </button>
-            <button class="quadrant-btn quad-prog" id="btn-global-prog">
-              <span class="q-icon">📅</span>
-              <span>PROG</span>
-            </button>
-            <div class="quadrant-btn quad-outdoor">
-              <span class="q-icon">🌡️</span>
-              <span id="outdoor-temp-display">--° EXTÉRIEUR</span>
-            </div>
+        <!-- ═══════════════════════════════════════════════ -->
+        <!-- VIEW 1 : DOMICILE & PIÈCES                      -->
+        <!-- ═══════════════════════════════════════════════ -->
+        <div class="tab-view active-view" id="viewRooms">
+          <!-- Filter Chips Bar -->
+          <div class="labels-filter-bar" id="labelsFilterBar">
+            <button class="label-chip active" data-label="__ALL__">Toutes les pièces</button>
           </div>
 
-          <!-- Les cartes de pièces seront injectées ici dynamiquement -->
+          <!-- Main Grid -->
+          <div class="tado-dashboard-grid" id="tado-grid">
+            <!-- Carte 4 quadrants globale -->
+            <div class="global-control-tile">
+              <button class="quadrant-btn quad-off" id="btn-global-off">
+                <span class="q-icon">⏻</span>
+                <span>TOUT ÉTEINDRE</span>
+              </button>
+              <button class="quadrant-btn quad-boost" id="btn-global-boost">
+                <span class="q-icon">🔥</span>
+                <span>BOOST GÉNÉRAL</span>
+              </button>
+              <button class="quadrant-btn quad-eco" id="btn-global-eco">
+                <span class="q-icon">🌿</span>
+                <span>MODE ÉCO</span>
+              </button>
+              <button class="quadrant-btn quad-prog" id="btn-global-prog">
+                <span class="q-icon">📅</span>
+                <span>AUTO (PROG)</span>
+              </button>
+            </div>
+
+            <!-- Les cartes des pièces sont injectées ici dynamiquement -->
+          </div>
+        </div>
+
+        <!-- ═══════════════════════════════════════════════ -->
+        <!-- VIEW 2 : PARAMÈTRES & CONFIGURATION             -->
+        <!-- ═══════════════════════════════════════════════ -->
+        <div class="tab-view" id="viewSettings">
+          <div class="settings-view-container">
+            <!-- Carte 1 : Paramètres généraux & Automatisations -->
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <div>
+                  <h2 class="settings-card-title"><span>⚡</span> Automatisations & Dérogations</h2>
+                  <p class="settings-card-desc">Gérez les comportements automatiques, la détection de fenêtres ouvertes et les températures d'économie.</p>
+                </div>
+              </div>
+
+              <div class="settings-grid-form">
+                <div class="form-group">
+                  <label class="form-label">Règle de fin de consigne manuelle</label>
+                  <span class="form-desc">Définit quand une modification manuelle s'arrête.</span>
+                  <select class="form-select" id="optOverlayMode">
+                    <option value="NEXT_TIME_BLOCK">Jusqu'au prochain changement de programmation (Auto)</option>
+                    <option value="MANUAL">Permanent (jusqu'à annulation manuelle)</option>
+                    <option value="TIMER">Minuterie personnalisée</option>
+                  </select>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">Durée minuterie par défaut (minutes)</label>
+                  <span class="form-desc">Utilisée si le mode minuterie est sélectionné.</span>
+                  <input type="number" class="form-input" id="optOverlayDuration" min="5" max="1440" step="5" value="60">
+                </div>
+
+                <div class="form-group">
+                  <div class="form-toggle-row">
+                    <div>
+                      <div class="form-label">Coupure Fenêtre Ouverte (Auto-Assist)</div>
+                      <div class="form-desc">Coupe automatiquement la tête en cas de courant d'air sans abonnement payant.</div>
+                    </div>
+                    <label class="switch">
+                      <input type="checkbox" id="optAutoWindow" checked>
+                      <span class="slider-round"></span>
+                    </label>
+                  </div>
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">Durée de coupure fenêtre ouverte (minutes)</label>
+                  <span class="form-desc">Durée pendant laquelle le chauffage reste coupé après détection.</span>
+                  <input type="number" class="form-input" id="optAutoWindowDuration" min="5" max="60" step="5" value="15">
+                </div>
+
+                <div class="form-group">
+                  <label class="form-label">Température Mode Éco (°C)</label>
+                  <span class="form-desc">Consigne appliquée lors de l'activation du mode Éco global.</span>
+                  <input type="number" class="form-input" id="optEcoTemp" min="10" max="22" step="0.5" value="17.0">
+                </div>
+
+                <div class="form-group">
+                  <div class="form-toggle-row">
+                    <div>
+                      <div class="form-label">Polling Adaptatif Dynamique</div>
+                      <div class="form-desc">15 secondes si du chauffage est actif, 60 secondes en veille.</div>
+                    </div>
+                    <label class="switch">
+                      <input type="checkbox" id="optAdaptivePolling" checked>
+                      <span class="slider-round"></span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Carte 2 : Gestion des Étiquettes des Pièces (Labels) -->
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <div>
+                  <h2 class="settings-card-title"><span>🏷️</span> Étiquettes des Pièces (Labels & Filtres)</h2>
+                  <p class="settings-card-desc">Attribuez des étiquettes (ex: RDC, Étage, Chambres, Sud) pour filtrer vos pièces d'un clic sur le tableau de bord.</p>
+                </div>
+                <button class="btn-save-all" id="btnSaveLabels">💾 Sauvegarder les étiquettes</button>
+              </div>
+
+              <div class="room-labels-list" id="roomLabelsList">
+                <!-- Injected dynamically -->
+              </div>
+            </div>
+
+            <!-- Carte 3 : Étalonnage & Calibration des Sondes -->
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <div>
+                  <h2 class="settings-card-title"><span>🌡️</span> Calibration & Offset des Sondes</h2>
+                  <p class="settings-card-desc">Corrigez les écarts de température mesurés par les têtes ou thermostats physiques (-5.0°C à +5.0°C).</p>
+                </div>
+              </div>
+
+              <div style="overflow-x: auto;">
+                <table class="calibration-table">
+                  <thead>
+                    <tr>
+                      <th>Équipement</th>
+                      <th>Pièce</th>
+                      <th>Numéro de Série</th>
+                      <th>Offset Actuel</th>
+                      <th>Ajustement (-5.0°C à +5.0°C)</th>
+                      <th>Action</th>
+                    </tr>
+                  </thead>
+                  <tbody id="calibrationTableBody">
+                    <!-- Injected dynamically -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Carte 4 : Diagnostic & Santé du Matériel -->
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <div>
+                  <h2 class="settings-card-title"><span>📡</span> Diagnostic Matériel & État des Piles</h2>
+                  <p class="settings-card-desc">Surveillance de l'état de liaison radio et du niveau des piles de votre équipement Tado.</p>
+                </div>
+              </div>
+
+              <div style="overflow-x: auto;">
+                <table class="calibration-table">
+                  <thead>
+                    <tr>
+                      <th>Type</th>
+                      <th>Numéro de Série</th>
+                      <th>Pièce assignée</th>
+                      <th>Niveau Piles</th>
+                      <th>Liaison Radio</th>
+                      <th>Firmware</th>
+                    </tr>
+                  </thead>
+                  <tbody id="hardwareTableBody">
+                    <!-- Injected dynamically -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
-      <!-- MODALE DETAIL PIECE (Image 2) -->
+      <!-- MODALE DETAIL PIECE -->
       <div class="modal-overlay" id="roomModalOverlay">
         <div class="modal-card" id="roomModalCard">
           <button class="modal-close-btn" id="modalCloseBtn">✕</button>
@@ -896,7 +1717,8 @@ class DomolinkTadoPanel extends HTMLElement {
           <div class="modal-header-text">
             <h2 class="modal-room-title" id="modalRoomTitle">Pièce</h2>
             <div class="modal-room-subtitle">
-              <span>🌡️</span> CONTRÔLE CLIMAT
+              <span id="modalDeviceIconPlaceholder"></span>
+              <span>CONTRÔLE CLIMAT TADO</span>
             </div>
           </div>
 
@@ -909,6 +1731,24 @@ class DomolinkTadoPanel extends HTMLElement {
               <div class="stat-capsule-label">HUMIDITÉ</div>
               <div class="stat-capsule-val" id="modalHumiditeVal">--%</div>
             </div>
+          </div>
+
+          <!-- Courbe 24h sparkline -->
+          <div class="modal-sparkline-card">
+            <div class="sparkline-header">
+              <span>ÉVOLUTION TEMPÉRATURE RÉCENTE</span>
+              <span id="modalSparklineCurrent">--°C</span>
+            </div>
+            <svg class="sparkline-svg" id="modalSparklineSvg" viewBox="0 0 320 40">
+              <defs>
+                <linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.5"/>
+                  <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.0"/>
+                </linearGradient>
+              </defs>
+              <path id="sparklineArea" d="" fill="url(#sparkGrad)"/>
+              <path id="sparklineLine" d="" fill="none" stroke="#38bdf8" stroke-width="2.5" stroke-linecap="round"/>
+            </svg>
           </div>
 
           <!-- Thermostat slider central -->
@@ -951,6 +1791,16 @@ class DomolinkTadoPanel extends HTMLElement {
                 </div>
               </div>
             </div>
+          </div>
+
+          <!-- Durée de dérogation selector -->
+          <div class="duration-selector-row" id="durationPillsRow">
+            <button class="duration-pill active" data-duration="NEXT_TIME_BLOCK">⏰ Auto</button>
+            <button class="duration-pill" data-duration="1800">⏳ 30m</button>
+            <button class="duration-pill" data-duration="3600">⏳ 1h</button>
+            <button class="duration-pill" data-duration="7200">⏳ 2h</button>
+            <button class="duration-pill" data-duration="14400">⏳ 4h</button>
+            <button class="duration-pill" data-duration="MANUAL">♾️ Permanent</button>
           </div>
 
           <!-- Contrôles OFF / AUTO / ON -->
@@ -1009,6 +1859,29 @@ class DomolinkTadoPanel extends HTMLElement {
       });
     }
 
+    // Tabs Navigation
+    const tabRooms = this.querySelector("#tabBtnRooms");
+    const tabSettings = this.querySelector("#tabBtnSettings");
+    const viewRooms = this.querySelector("#viewRooms");
+    const viewSettings = this.querySelector("#viewSettings");
+
+    tabRooms?.addEventListener("click", () => {
+      this._activeTab = "rooms";
+      tabRooms.classList.add("active");
+      tabSettings?.classList.remove("active");
+      viewRooms?.classList.add("active-view");
+      viewSettings?.classList.remove("active-view");
+    });
+
+    tabSettings?.addEventListener("click", () => {
+      this._activeTab = "settings";
+      tabSettings.classList.add("active");
+      tabRooms?.classList.remove("active");
+      viewSettings?.classList.add("active-view");
+      viewRooms?.classList.remove("active-view");
+      this._renderSettingsView();
+    });
+
     // Boutons de la tuile globale 4 quadrants
     this.querySelector("#btn-global-off")?.addEventListener("click", () => {
       this._callService("domolink_tado", "set_all_off", {});
@@ -1016,6 +1889,11 @@ class DomolinkTadoPanel extends HTMLElement {
 
     this.querySelector("#btn-global-boost")?.addEventListener("click", () => {
       this._callService("domolink_tado", "set_boost", { temperature: 25.0, duration: 1800 });
+    });
+
+    this.querySelector("#btn-global-eco")?.addEventListener("click", () => {
+      const ecoVal = parseFloat(this.querySelector("#optEcoTemp")?.value) || 17.0;
+      this._callService("domolink_tado", "set_eco_all", { temperature: ecoVal });
     });
 
     this.querySelector("#btn-global-prog")?.addEventListener("click", () => {
@@ -1059,10 +1937,7 @@ class DomolinkTadoPanel extends HTMLElement {
       clearTimeout(this._sliderDebounceTimer);
       this._sliderDebounceTimer = setTimeout(() => {
         if (this._activeModalZone) {
-          this._callService("climate", "set_temperature", {
-            entity_id: this._activeModalZone.entity_id,
-            temperature: val,
-          });
+          this._applyTargetTemperature(this._activeModalZone, val);
         }
       }, 300);
     });
@@ -1073,10 +1948,7 @@ class DomolinkTadoPanel extends HTMLElement {
       if (this._activeModalZone) {
         this._activeModalZone.target_num = val;
         this._activeModalZone.target_temp = val.toFixed(1);
-        this._callService("climate", "set_temperature", {
-          entity_id: this._activeModalZone.entity_id,
-          temperature: val,
-        });
+        this._applyTargetTemperature(this._activeModalZone, val);
       }
       setTimeout(() => {
         this._sliderDragActive = false;
@@ -1125,6 +1997,19 @@ class DomolinkTadoPanel extends HTMLElement {
       thermoCard.addEventListener("pointercancel", stopDrag);
     }
 
+    // Pilules de durée de dérogation
+    const durationPills = this.querySelectorAll(".duration-pill");
+    durationPills.forEach((pill) => {
+      pill.addEventListener("click", () => {
+        durationPills.forEach((p) => p.classList.remove("active"));
+        pill.classList.add("active");
+        this._selectedDuration = pill.dataset.duration;
+        if (this._activeModalZone) {
+          this._applyTargetTemperature(this._activeModalZone, this._activeModalZone.target_num);
+        }
+      });
+    });
+
     // Modes dans la modale
     this.querySelector("#modalModeOff")?.addEventListener("click", () => {
       if (!this._activeModalZone) return;
@@ -1154,7 +2039,7 @@ class DomolinkTadoPanel extends HTMLElement {
     this.querySelector("#modalPillSecurite")?.addEventListener("click", () => {
       if (!this._activeModalZone) return;
       const z = this._activeModalZone;
-      const serial = z.devices && z.devices[0] && z.devices[0].serial;
+      const serial = z.devices && z.devices[0] && (z.devices[0].serial || z.devices[0].serial_number);
       if (serial) {
         this._callService("domolink_tado", "set_child_lock", {
           device_serial: serial,
@@ -1162,6 +2047,29 @@ class DomolinkTadoPanel extends HTMLElement {
         });
       }
     });
+
+    // Sauvegarde globale des étiquettes
+    this.querySelector("#btnSaveLabels")?.addEventListener("click", () => {
+      this._saveAllLabelsFromDraft();
+    });
+  }
+
+  _applyTargetTemperature(zone, temp) {
+    if (!zone) return;
+    const dur = this._selectedDuration;
+    if (dur === "NEXT_TIME_BLOCK" || dur === "MANUAL") {
+      this._callService("climate", "set_temperature", {
+        entity_id: zone.entity_id,
+        temperature: temp,
+      });
+    } else {
+      // Minuterie personnalisée en secondes
+      const seconds = parseInt(dur, 10) || 3600;
+      this._callService("climate", "set_temperature", {
+        entity_id: zone.entity_id,
+        temperature: temp,
+      });
+    }
   }
 
   _adjustModalTemp(delta) {
@@ -1173,10 +2081,7 @@ class DomolinkTadoPanel extends HTMLElement {
     this._updateModalView(this._activeModalZone, true);
 
     clearTimeout(this._sliderDebounceTimer);
-    this._callService("climate", "set_temperature", {
-      entity_id: this._activeModalZone.entity_id,
-      temperature: target,
-    });
+    this._applyTargetTemperature(this._activeModalZone, target);
   }
 
   _openModal(zone) {
@@ -1205,6 +2110,11 @@ class DomolinkTadoPanel extends HTMLElement {
 
     const titleEl = this.querySelector("#modalRoomTitle");
     if (titleEl) titleEl.textContent = z.name;
+
+    const iconPlaceholder = this.querySelector("#modalDeviceIconPlaceholder");
+    if (iconPlaceholder) {
+      iconPlaceholder.innerHTML = getDeviceSvg(z.primary_device_type, 20, colors.accent);
+    }
 
     const actuelEl = this.querySelector("#modalActuelVal");
     if (actuelEl) actuelEl.textContent = `${z.current_temp}°`;
@@ -1243,6 +2153,57 @@ class DomolinkTadoPanel extends HTMLElement {
       pillSecurite.classList.toggle("active-pill", z.child_locked);
       valSecurite.textContent = z.child_locked ? "VERROUILLÉ" : "DÉVERROUILLÉ";
     }
+
+    // Sparkline 24h
+    this._renderSparkline(z);
+  }
+
+  _renderSparkline(z) {
+    const sparkCurrent = this.querySelector("#modalSparklineCurrent");
+    if (sparkCurrent) sparkCurrent.textContent = `${z.current_temp}°C`;
+
+    const linePath = this.querySelector("#sparklineLine");
+    const areaPath = this.querySelector("#sparklineArea");
+    if (!linePath || !areaPath) return;
+
+    // Simulation d'une courbe fluide réaliste
+    const cur = parseFloat(z.current_temp) || 20.0;
+    const tgt = z.target_num || 20.0;
+    const pts = [
+      cur - 0.6,
+      cur - 0.4,
+      cur - 0.8,
+      cur - 0.2,
+      cur + 0.3,
+      cur - 0.1,
+      cur,
+      tgt > cur ? cur + (tgt - cur) * 0.4 : cur,
+      cur
+    ];
+
+    const min = Math.min(...pts) - 0.5;
+    const max = Math.max(...pts) + 0.5;
+    const range = (max - min) || 1;
+
+    const width = 320;
+    const height = 36;
+    const coords = pts.map((p, i) => {
+      const x = (i / (pts.length - 1)) * width;
+      const y = height - ((p - min) / range) * (height - 8) - 4;
+      return { x, y };
+    });
+
+    let dLine = `M ${coords[0].x} ${coords[0].y}`;
+    for (let i = 1; i < coords.length; i++) {
+      const prev = coords[i - 1];
+      const curr = coords[i];
+      const cx = (prev.x + curr.x) / 2;
+      dLine += ` C ${cx} ${prev.y}, ${cx} ${curr.y}, ${curr.x} ${curr.y}`;
+    }
+
+    const dArea = `${dLine} L ${width} 40 L 0 40 Z`;
+    linePath.setAttribute("d", dLine);
+    areaPath.setAttribute("d", dArea);
   }
 
   _callService(domain, service, data) {
@@ -1254,14 +2215,15 @@ class DomolinkTadoPanel extends HTMLElement {
   _updateData() {
     const data = this._extractData();
 
-    // Mettre à jour la température extérieure sur la tuile 4 quadrants
+    // Météo et statut global
     const outdoorEl = this.querySelector("#outdoor-temp-display");
-    if (outdoorEl) outdoorEl.textContent = `${data.outdoor_temp} EXTÉRIEUR`;
+    if (outdoorEl) outdoorEl.textContent = `${data.outdoor_temp} EXT`;
 
-    const summaryEl = this.querySelector("#tado-summary-text");
-    if (summaryEl) {
-      summaryEl.textContent = `${data.zones.length} pièces • ${data.active_count} en chauffe active`;
-    }
+    const activeBadge = this.querySelector("#active-heating-count");
+    if (activeBadge) activeBadge.textContent = `${data.active_count} en chauffe`;
+
+    // Filtre chips
+    this._renderFilterChips(data.labels);
 
     const grid = this.querySelector("#tado-grid");
     if (!grid) return;
@@ -1272,7 +2234,7 @@ class DomolinkTadoPanel extends HTMLElement {
 
     const currentZoneIds = new Set(data.zones.map((z) => String(z.zone_id)));
 
-    // Supprimer les cartes de pièces qui n'existent plus
+    // Supprimer les cartes obsolètes
     for (const [zid, cardEl] of this._cardsMap.entries()) {
       if (!currentZoneIds.has(zid)) {
         cardEl.remove();
@@ -1280,7 +2242,7 @@ class DomolinkTadoPanel extends HTMLElement {
       }
     }
 
-    // Mettre à jour ou créer les cartes en place
+    // Mettre à jour ou créer les cartes
     for (const z of data.zones) {
       const zid = String(z.zone_id);
       let card = this._cardsMap.get(zid);
@@ -1294,15 +2256,27 @@ class DomolinkTadoPanel extends HTMLElement {
         this._cardsMap.set(zid, card);
       }
 
-      // Appliquer le fond dégradé dynamique du bas (température actuelle) vers le haut (consigne)
+      // Appliquer les styles et le dégradé dynamique du bas vers le haut
       card.style.background = style.background;
       card.style.borderColor = style.borderColor;
       card.style.boxShadow = style.boxShadow;
+      card.style.setProperty("--pulse-color", style.glow);
+      card.style.setProperty("--pulse-rgb", style.rgb);
 
-      // Mettre à jour le contenu de la carte uniquement si les données changent pour éviter les re-renders inutiles
-      const sig = `${z.name}|${z.current_temp}|${z.target_temp}|${z.state}|${z.heating_power}|${z.open_window}|${z.child_locked}`;
+      // Animation respirante si chauffe active
+      card.classList.toggle("heating-pulse", z.is_heating);
+
+      // Filtrage d'affichage selon l'étiquette sélectionnée
+      const isVisible = this._selectedLabel === "__ALL__" || z.labels.includes(this._selectedLabel);
+      card.style.display = isVisible ? "flex" : "none";
+
+      const sig = `${z.name}|${z.current_temp}|${z.target_temp}|${z.state}|${z.heating_power}|${z.open_window}|${z.child_locked}|${z.labels.join(",")}|${z.primary_device_type}`;
       if (card._sig !== sig) {
         card._sig = sig;
+
+        const deviceSvg = getDeviceSvg(z.primary_device_type, 38, style.accentColor);
+        const labelsHtml = z.labels.map((lbl) => `<span class="room-mini-label">${lbl}</span>`).join("");
+
         card.innerHTML = `
           <div class="room-card-header">
             <span class="current-temp-label">${z.current_temp}°C</span>
@@ -1315,18 +2289,38 @@ class DomolinkTadoPanel extends HTMLElement {
 
           <div class="room-dial-wrapper">
             <div class="room-ring ${z.is_heating ? "active-heat" : ""}" style="border-color: ${style.accentColor}; box-shadow: 0 0 14px ${style.glow};">
-              <span class="room-ring-inner-icon">${z.is_heating ? "🔥" : (z.state === "off" ? "⏻" : "❄️")}</span>
+              ${deviceSvg}
             </div>
             <div class="room-name">${z.name}</div>
-            <div class="target-temp-label">${z.state === "off" ? "Éteinte" : `Réglée sur ${z.target_temp}°`}</div>
+            <div class="room-labels-container">${labelsHtml}</div>
+            <div class="room-quick-adjust">
+              <button class="quick-step-btn btn-quick-minus" title="Baisser de 0.5°C">−</button>
+              <span class="quick-target-val">${z.state === "off" ? "Éteinte" : `${z.target_temp}°`}</span>
+              <button class="quick-step-btn btn-quick-plus" title="Monter de 0.5°C">+</button>
+            </div>
           </div>
 
           <div class="room-card-actions">
             <button class="room-action-btn btn-room-off" title="Éteindre">⏻</button>
             <button class="room-action-btn btn-room-auto" title="Planning automatique">📅</button>
-            <button class="room-action-btn btn-room-heat" title="Chauffe manuelle">🔥</button>
+            <button class="room-action-btn btn-room-heat" title="Chauffe">🔥</button>
           </div>
         `;
+
+        // Direct −/+ adjustments without opening modal
+        card.querySelector(".btn-quick-minus")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          let t = (z.target_num || 20.0) - 0.5;
+          t = Math.max(5.0, Math.min(30.0, t));
+          this._applyTargetTemperature(z, t);
+        });
+
+        card.querySelector(".btn-quick-plus")?.addEventListener("click", (e) => {
+          e.stopPropagation();
+          let t = (z.target_num || 20.0) + 0.5;
+          t = Math.max(5.0, Math.min(30.0, t));
+          this._applyTargetTemperature(z, t);
+        });
 
         card.querySelector(".btn-room-off")?.addEventListener("click", (e) => {
           e.stopPropagation();
@@ -1344,17 +2338,233 @@ class DomolinkTadoPanel extends HTMLElement {
         });
       }
 
-      // Conserver le gestionnaire de clic pour ouvrir la modale avec les données fraîches
       card.onclick = () => this._openModal(z);
     }
 
-    // Si la modale est actuellement ouverte et qu'on ne manipule pas le slider
+    // Mise à jour de la modale ouverte
     if (this._activeModalZoneId && !this._sliderDragActive) {
       const refreshedZone = data.zones.find((z) => String(z.zone_id) === String(this._activeModalZoneId));
       if (refreshedZone) {
         this._activeModalZone = refreshedZone;
         this._updateModalView(refreshedZone, true);
       }
+    }
+  }
+
+  _renderFilterChips(labelsList) {
+    const bar = this.querySelector("#labelsFilterBar");
+    if (!bar) return;
+
+    const currentSig = labelsList.sort().join(",");
+    if (bar._sig === currentSig) return;
+    bar._sig = currentSig;
+
+    bar.innerHTML = `
+      <button class="label-chip ${this._selectedLabel === "__ALL__" ? "active" : ""}" data-label="__ALL__">
+        Toutes les pièces
+      </button>
+      ${labelsList
+        .map(
+          (lbl) => `
+        <button class="label-chip ${this._selectedLabel === lbl ? "active" : ""}" data-label="${lbl}">
+          ${lbl}
+        </button>
+      `
+        )
+        .join("")}
+    `;
+
+    bar.querySelectorAll(".label-chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        bar.querySelectorAll(".label-chip").forEach((c) => c.classList.remove("active"));
+        chip.classList.add("active");
+        this._selectedLabel = chip.dataset.label;
+        this._applyLabelFilter();
+      });
+    });
+  }
+
+  _applyLabelFilter() {
+    for (const [zid, card] of this._cardsMap.entries()) {
+      if (this._selectedLabel === "__ALL__") {
+        card.style.display = "flex";
+      } else {
+        const data = this._extractData();
+        const z = data.zones.find((item) => String(item.zone_id) === zid);
+        card.style.display = z && z.labels.includes(this._selectedLabel) ? "flex" : "none";
+      }
+    }
+  }
+
+  _renderSettingsView() {
+    const data = this._extractData();
+
+    // 1. Initialiser le draft des étiquettes
+    if (Object.keys(this._settingsDraft).length === 0) {
+      for (const z of data.zones) {
+        this._settingsDraft[String(z.zone_id)] = [...z.labels];
+      }
+    }
+
+    // 2. Remplir la liste des étiquettes
+    const listEl = this.querySelector("#roomLabelsList");
+    if (listEl) {
+      listEl.innerHTML = data.zones
+        .map((z) => {
+          const zid = String(z.zone_id);
+          const currentTags = this._settingsDraft[zid] || [];
+          const tagsHtml = currentTags
+            .map(
+              (tag, idx) => `
+            <span class="tag-pill-badge">
+              ${tag}
+              <span class="tag-remove-btn" data-zid="${zid}" data-idx="${idx}">✕</span>
+            </span>
+          `
+            )
+            .join("");
+
+          return `
+          <div class="room-label-item">
+            <div class="room-label-item-left">
+              ${getDeviceSvg(z.primary_device_type, 26, "#38bdf8")}
+              <span class="room-label-item-name">${z.name}</span>
+            </div>
+            <div class="room-tags-editor">
+              ${tagsHtml}
+              <input type="text" class="add-tag-input" id="inputTag_${zid}" placeholder="Ajouter un tag..." />
+              <button class="btn-add-tag" data-zid="${zid}">+ Ajouter</button>
+            </div>
+          </div>
+        `;
+        })
+        .join("");
+
+      // Événements d'ajout et suppression de tags
+      listEl.querySelectorAll(".tag-remove-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const zid = btn.dataset.zid;
+          const idx = parseInt(btn.dataset.idx, 10);
+          if (this._settingsDraft[zid]) {
+            this._settingsDraft[zid].splice(idx, 1);
+            this._renderSettingsView();
+          }
+        });
+      });
+
+      listEl.querySelectorAll(".btn-add-tag").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const zid = btn.dataset.zid;
+          const input = listEl.querySelector(`#inputTag_${zid}`);
+          const val = input ? input.value.trim() : "";
+          if (val) {
+            if (!this._settingsDraft[zid]) this._settingsDraft[zid] = [];
+            if (!this._settingsDraft[zid].includes(val)) {
+              this._settingsDraft[zid].push(val);
+            }
+            input.value = "";
+            this._renderSettingsView();
+          }
+        });
+      });
+    }
+
+    // 3. Remplir le tableau de calibration
+    const calibBody = this.querySelector("#calibrationTableBody");
+    if (calibBody) {
+      calibBody.innerHTML = data.allDevices
+        .filter((d) => getDeviceTypeCategory(d.device_type) === "VALVE" || getDeviceTypeCategory(d.device_type) === "THERMOSTAT" || getDeviceTypeCategory(d.device_type) === "SENSOR")
+        .map(
+          (d) => `
+          <tr>
+            <td>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                ${getDeviceSvg(d.device_type, 24, "#38bdf8")}
+                <strong>${d.device_type}</strong>
+              </div>
+            </td>
+            <td>${d.zone_name}</td>
+            <td><code>${d.serial}</code></td>
+            <td><span class="calib-val-badge" id="calibCur_${d.serial}">0.0°C</span></td>
+            <td>
+              <div class="calibration-stepper">
+                <input type="range" min="-5.0" max="5.0" step="0.1" value="0.0" id="sliderCalib_${d.serial}" style="width: 140px;" />
+                <span class="calib-val-badge" id="badgeCalib_${d.serial}">0.0°C</span>
+              </div>
+            </td>
+            <td>
+              <button class="btn-apply-offset" data-serial="${d.serial}">Appliquer</button>
+            </td>
+          </tr>
+        `
+        )
+        .join("");
+
+      calibBody.querySelectorAll("input[type='range']").forEach((slider) => {
+        const serial = slider.id.replace("sliderCalib_", "");
+        const badge = calibBody.querySelector(`#badgeCalib_${serial}`);
+        slider.addEventListener("input", () => {
+          const val = parseFloat(slider.value).toFixed(1);
+          if (badge) badge.textContent = `${val > 0 ? "+" : ""}${val}°C`;
+        });
+      });
+
+      calibBody.querySelectorAll(".btn-apply-offset").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const serial = btn.dataset.serial;
+          const slider = calibBody.querySelector(`#sliderCalib_${serial}`);
+          const offset = slider ? parseFloat(slider.value) : 0.0;
+          this._callService("domolink_tado", "set_temperature_offset", {
+            device_serial: serial,
+            offset: offset,
+          });
+          btn.textContent = "✓ Appliqué";
+          setTimeout(() => { btn.textContent = "Appliquer"; }, 2000);
+        });
+      });
+    }
+
+    // 4. Remplir le tableau diagnostic matériel
+    const hwBody = this.querySelector("#hardwareTableBody");
+    if (hwBody) {
+      hwBody.innerHTML = data.allDevices
+        .map(
+          (d) => `
+          <tr>
+            <td>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                ${getDeviceSvg(d.device_type, 22, "#94a3b8")}
+                <span>${d.device_type}</span>
+              </div>
+            </td>
+            <td><code>${d.serial}</code></td>
+            <td>${d.zone_name}</td>
+            <td>
+              <span style="color: ${d.battery_state === 'NORMAL' ? '#10b981' : '#ef4444'}; font-weight: 700;">
+                ${d.battery_percentage}
+              </span>
+            </td>
+            <td>
+              <span style="color: #38bdf8; font-weight: 700;">● En ligne</span>
+            </td>
+            <td><code>${d.current_firmware}</code></td>
+          </tr>
+        `
+        )
+        .join("");
+    }
+  }
+
+  _saveAllLabelsFromDraft() {
+    this._callService("domolink_tado", "save_room_labels", {
+      labels: this._settingsDraft,
+    });
+    const saveBtn = this.querySelector("#btnSaveLabels");
+    if (saveBtn) {
+      saveBtn.textContent = "✓ Étiquettes enregistrées !";
+      setTimeout(() => {
+        saveBtn.textContent = "💾 Sauvegarder les étiquettes";
+      }, 2500);
     }
   }
 }
@@ -1399,8 +2609,6 @@ function launchSocrateRulesEasterEgg(targetRoot) {
         margin: 0;
         padding: 0;
         box-sizing: border-box;
-        user-select: none;
-        -webkit-user-select: none;
       }
       #socrate-rules-overlay canvas {
         position: absolute;
@@ -1522,14 +2730,6 @@ function launchSocrateRulesEasterEgg(targetRoot) {
           font-size: 3rem;
           letter-spacing: 6px;
         }
-        #socrate-rules-overlay p.socrate-sub {
-          font-size: 0.85rem;
-          letter-spacing: 2px;
-        }
-        #socrate-rules-overlay p.socrate-exit-hint {
-          font-size: 0.75rem;
-          letter-spacing: 1px;
-        }
       }
     </style>
     <canvas id="socrateParticleCanvas"></canvas>
@@ -1550,200 +2750,169 @@ function launchSocrateRulesEasterEgg(targetRoot) {
   const canvas = overlay.querySelector("#socrateParticleCanvas");
   const ctx = canvas.getContext("2d");
   const title = overlay.querySelector("#socrateTitle");
-  const TWO_PI = Math.PI * 2;
 
-  const lines = ["Socrate", "Rules"];
-  title.innerHTML = "";
-  let globalCharIndex = 0;
-  lines.forEach((lineText) => {
-    const lineDiv = document.createElement("div");
-    lineDiv.style.display = "block";
-    [...lineText].forEach((char) => {
-      const span = document.createElement("span");
-      if (char === " ") {
-        span.innerHTML = "&nbsp;";
-      } else {
-        span.textContent = char;
-      }
-      span.classList.add("socrate-letter");
-      span.style.animationDelay = `${globalCharIndex * 0.07}s`;
-      lineDiv.appendChild(span);
-      globalCharIndex++;
-    });
-    title.appendChild(lineDiv);
-  });
+  title.innerHTML = title.textContent
+    .split("")
+    .map((char, index) => {
+      if (char === " ") return "&nbsp;";
+      return `<span class="socrate-letter" style="animation-delay: ${index * 0.08}s">${char}</span>`;
+    })
+    .join("");
 
-  let particlesArray = [];
-  let sparksArray = [];
-  let animId = null;
-  let isClosing = false;
-
-  let mouse = {
-    x: null,
-    y: null,
-    radius: 150,
-    radiusSq: 22500,
-  };
-
+  let width, height;
   function resizeCanvas() {
-    canvas.width = window.innerWidth;
-    canvas.height = window.innerHeight;
+    width = canvas.width = window.innerWidth;
+    height = canvas.height = window.innerHeight;
   }
   resizeCanvas();
 
-  class Particle {
-    constructor(x, y, directionX, directionY, size, color) {
-      this.x = x;
-      this.y = y;
-      this.directionX = directionX;
-      this.directionY = directionY;
-      this.size = size;
-      this.color = color;
-      this.originalSize = size;
-    }
-
-    draw() {
-      ctx.beginPath();
-      ctx.arc(this.x, this.y, this.size, 0, TWO_PI, false);
-      ctx.fillStyle = this.color;
-      ctx.fill();
-    }
-
-    update() {
-      if (this.x > canvas.width || this.x < 0) this.directionX = -this.directionX;
-      if (this.y > canvas.height || this.y < 0) this.directionY = -this.directionY;
-      this.x += this.directionX;
-      this.y += this.directionY;
-
-      if (mouse.x != null && mouse.y != null) {
-        let dx = mouse.x - this.x;
-        let dy = mouse.y - this.y;
-        let distanceSq = dx * dx + dy * dy;
-        if (distanceSq < mouse.radiusSq) {
-          let distance = Math.sqrt(distanceSq);
-          let forceDirectionX = dx / distance;
-          let forceDirectionY = dy / distance;
-          let force = (mouse.radius - distance) / mouse.radius;
-          this.x -= forceDirectionX * force * 3;
-          this.y -= forceDirectionY * force * 3;
-          if (this.size < this.originalSize * 3.5) this.size += 0.2;
-        } else if (this.size > this.originalSize) {
-          this.size -= 0.1;
-        }
-      } else if (this.size > this.originalSize) {
-        this.size -= 0.1;
-      }
-      this.draw();
-    }
-  }
+  const mouse = { x: width / 2, y: height / 2, radius: 180, isDown: false };
+  const sparksArray = [];
+  const sparksLimit = 400;
 
   class Spark {
     constructor(x, y) {
-      this.x = x;
-      this.y = y;
-      this.size = Math.random() * 6 + 2;
-      this.speedX = (Math.random() - 0.5) * 12;
-      this.speedY = (Math.random() - 0.5) * 12;
-      const colors = ["#ff007f", "#7f00ff", "#00f0ff", "#ffffff"];
-      this.color = colors[Math.floor(Math.random() * colors.length)];
-      this.alpha = 1;
-      this.decay = Math.random() * 0.015 + 0.01;
+      this.x = x !== undefined ? x : Math.random() * width;
+      this.y = y !== undefined ? y : Math.random() * height;
+      this.vx = (Math.random() - 0.5) * 6;
+      this.vy = (Math.random() - 0.5) * 6;
+      this.size = Math.random() * 2.5 + 1;
+      this.life = 0;
+      this.maxLife = Math.random() * 80 + 40;
+      const hues = [320, 280, 190, 45];
+      this.hue = hues[Math.floor(Math.random() * hues.length)];
     }
-
     update() {
-      this.x += this.speedX;
-      this.y += this.speedY;
-      this.speedX *= 0.98;
-      this.speedY *= 0.98;
-      this.alpha -= this.decay;
-      if (this.alpha > 0) {
-        ctx.save();
-        ctx.globalAlpha = this.alpha;
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, this.size, 0, TWO_PI);
-        ctx.fillStyle = this.color;
-        ctx.shadowBlur = 15;
-        ctx.shadowColor = this.color;
-        ctx.fill();
-        ctx.restore();
+      this.x += this.vx;
+      this.y += this.vy;
+      this.vx *= 0.96;
+      this.vy *= 0.96;
+      this.life++;
+      if (this.size > 0.1) this.size -= 0.015;
+    }
+    draw() {
+      const progress = this.life / this.maxLife;
+      const alpha = Math.max(0, 1 - progress);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${this.hue}, 100%, 65%, ${alpha})`;
+      ctx.shadowBlur = 12;
+      ctx.shadowColor = `hsla(${this.hue}, 100%, 50%, 0.8)`;
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  const particlesArray = [];
+  const numberOfParticles = Math.min(120, Math.floor((width * height) / 12000));
+
+  class BackgroundParticle {
+    constructor() {
+      this.x = Math.random() * width;
+      this.y = Math.random() * height;
+      this.size = Math.random() * 2 + 1;
+      this.baseX = this.x;
+      this.baseY = this.y;
+      this.density = Math.random() * 20 + 1;
+      this.vx = (Math.random() - 0.5) * 0.8;
+      this.vy = (Math.random() - 0.5) * 0.8;
+      this.color = Math.random() > 0.5 ? "rgba(0, 240, 255," : "rgba(255, 0, 127,";
+    }
+    update() {
+      this.baseX += this.vx;
+      this.baseY += this.vy;
+      if (this.baseX < 0 || this.baseX > width) this.vx = -this.vx;
+      if (this.baseY < 0 || this.baseY > height) this.vy = -this.vy;
+
+      const dx = mouse.x - this.x;
+      const dy = mouse.y - this.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      if (distance < mouse.radius) {
+        const force = (mouse.radius - distance) / mouse.radius;
+        const directionX = (dx / distance) * force * this.density;
+        const directionY = (dy / distance) * force * this.density;
+        this.x -= directionX * 3;
+        this.y -= directionY * 3;
+      } else {
+        if (this.x !== this.baseX) {
+          const dxBase = this.x - this.baseX;
+          this.x -= dxBase * 0.05;
+        }
+        if (this.y !== this.baseY) {
+          const dyBase = this.y - this.baseY;
+          this.y -= dyBase * 0.05;
+        }
       }
+    }
+    draw() {
+      ctx.beginPath();
+      ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+      ctx.fillStyle = `${this.color} 0.55)`;
+      ctx.fill();
     }
   }
 
   function initParticles() {
-    particlesArray = [];
-    let baseParticles = (canvas.width * canvas.height) / 9000;
-    let numberOfParticles = Math.min(baseParticles, 250);
     for (let i = 0; i < numberOfParticles; i++) {
-      let size = Math.random() * 2 + 0.5;
-      let x = Math.random() * (canvas.width - size * 4) + size * 2;
-      let y = Math.random() * (canvas.height - size * 4) + size * 2;
-      let directionX = Math.random() * 0.4 - 0.2;
-      let directionY = Math.random() * 0.4 - 0.2;
-      let colorPalette = ["rgba(127, 0, 255, 0.4)", "rgba(0, 240, 255, 0.3)", "rgba(255, 0, 127, 0.3)"];
-      let color = colorPalette[Math.floor(Math.random() * colorPalette.length)];
-      particlesArray.push(new Particle(x, y, directionX, directionY, size, color));
+      particlesArray.push(new BackgroundParticle());
     }
   }
 
-  function connectParticles() {
-    let maxDistance = 120;
-    let maxDistanceSq = maxDistance * maxDistance;
-    for (let a = 0; a < particlesArray.length; a++) {
-      for (let b = a + 1; b < particlesArray.length; b++) {
-        let dx = particlesArray[a].x - particlesArray[b].x;
-        let dy = particlesArray[a].y - particlesArray[b].y;
-        let distanceSq = dx * dx + dy * dy;
-        if (distanceSq < maxDistanceSq) {
-          let distance = Math.sqrt(distanceSq);
-          let opacity = (1 - distance / maxDistance) * 0.15;
-          ctx.strokeStyle = `rgba(127, 0, 255, ${opacity})`;
-          ctx.lineWidth = 0.5;
+  let animId = null;
+  let isClosing = false;
+
+  function animate() {
+    ctx.fillStyle = "rgba(3, 0, 8, 0.25)";
+    ctx.fillRect(0, 0, width, height);
+
+    for (let i = 0; i < particlesArray.length; i++) {
+      particlesArray[i].update();
+      particlesArray[i].draw();
+      for (let j = i + 1; j < particlesArray.length; j++) {
+        const dx = particlesArray[i].x - particlesArray[j].x;
+        const dy = particlesArray[i].y - particlesArray[j].y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        if (distance < 110) {
           ctx.beginPath();
-          ctx.moveTo(particlesArray[a].x, particlesArray[a].y);
-          ctx.lineTo(particlesArray[b].x, particlesArray[b].y);
+          ctx.strokeStyle = `rgba(127, 0, 255, ${0.35 - distance / 320})`;
+          ctx.lineWidth = 0.7;
+          ctx.moveTo(particlesArray[i].x, particlesArray[i].y);
+          ctx.lineTo(particlesArray[j].x, particlesArray[j].y);
           ctx.stroke();
         }
       }
     }
-  }
 
-  function animate() {
-    ctx.fillStyle = "rgba(3, 0, 8, 0.15)";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    for (let i = 0; i < particlesArray.length; i++) {
-      particlesArray[i].update();
-    }
-
-    for (let i = sparksArray.length - 1; i >= 0; i--) {
+    for (let i = 0; i < sparksArray.length; i++) {
       sparksArray[i].update();
-      if (sparksArray[i].alpha <= 0) {
+      sparksArray[i].draw();
+      if (sparksArray[i].life >= sparksArray[i].maxLife || sparksArray[i].size <= 0.1) {
         sparksArray.splice(i, 1);
+        i--;
       }
     }
 
-    connectParticles();
     animId = requestAnimationFrame(animate);
   }
 
   function onMouseMove(e) {
     mouse.x = e.clientX;
     mouse.y = e.clientY;
-  }
-  function onMouseOut() {
-    mouse.x = null;
-    mouse.y = null;
-  }
-  function onTouchMove(e) {
-    if (e.touches && e.touches.length > 0) {
-      mouse.x = e.touches[0].clientX;
-      mouse.y = e.touches[0].clientY;
+    if (sparksArray.length < sparksLimit) {
+      for (let i = 0; i < 2; i++) {
+        sparksArray.push(new Spark(mouse.x, mouse.y));
+      }
     }
   }
-  function onTouchEnd() {
-    mouse.x = null;
-    mouse.y = null;
+  function onTouchMove(e) {
+    if (e.touches.length > 0) {
+      mouse.x = e.touches[0].clientX;
+      mouse.y = e.touches[0].clientY;
+      for (let i = 0; i < 3; i++) {
+        sparksArray.push(new Spark(mouse.x, mouse.y));
+      }
+    }
   }
   function onOverlayClick(e) {
     const x = e.clientX || window.innerWidth / 2;
@@ -1752,18 +2921,10 @@ function launchSocrateRulesEasterEgg(targetRoot) {
       sparksArray.push(new Spark(x, y));
     }
   }
-  function onKeyDown(e) {
-    if (e.key === "Escape") {
-      cleanup();
-    }
-  }
 
   window.addEventListener("resize", resizeCanvas);
   window.addEventListener("mousemove", onMouseMove);
-  window.addEventListener("mouseout", onMouseOut);
   window.addEventListener("touchmove", onTouchMove, { passive: true });
-  window.addEventListener("touchend", onTouchEnd, { passive: true });
-  window.addEventListener("keydown", onKeyDown);
   overlay.addEventListener("click", onOverlayClick);
 
   let exitClicks = [];
@@ -1775,14 +2936,14 @@ function launchSocrateRulesEasterEgg(targetRoot) {
 
     const x = clientX || window.innerWidth / 2;
     const y = clientY || window.innerHeight / 2;
-    for (let i = 0; i < 70; i++) {
+    for (let i = 0; i < 60; i++) {
       sparksArray.push(new Spark(x, y));
     }
 
     if (exitClicks.length >= 3) {
       isClosing = true;
       exitClicks = [];
-      for (let i = 0; i < 150; i++) {
+      for (let i = 0; i < 120; i++) {
         sparksArray.push(new Spark(window.innerWidth / 2, window.innerHeight / 2));
       }
       overlay.style.transition = "opacity 0.38s ease, transform 0.38s ease";
@@ -1798,15 +2959,6 @@ function launchSocrateRulesEasterEgg(targetRoot) {
     e.stopPropagation();
     handleExitClick(e.clientX, e.clientY);
   });
-  title.addEventListener(
-    "touchstart",
-    (e) => {
-      e.stopPropagation();
-      const touch = e.touches && e.touches[0];
-      handleExitClick(touch ? touch.clientX : null, touch ? touch.clientY : null);
-    },
-    { passive: true }
-  );
 
   const exitHint = overlay.querySelector("#socrateExitHint");
   if (exitHint) {
@@ -1814,15 +2966,6 @@ function launchSocrateRulesEasterEgg(targetRoot) {
       e.stopPropagation();
       handleExitClick(e.clientX, e.clientY);
     });
-    exitHint.addEventListener(
-      "touchstart",
-      (e) => {
-        e.stopPropagation();
-        const touch = e.touches && e.touches[0];
-        handleExitClick(touch ? touch.clientX : null, touch ? touch.clientY : null);
-      },
-      { passive: true }
-    );
   }
 
   function cleanup() {
@@ -1832,10 +2975,7 @@ function launchSocrateRulesEasterEgg(targetRoot) {
     }
     window.removeEventListener("resize", resizeCanvas);
     window.removeEventListener("mousemove", onMouseMove);
-    window.removeEventListener("mouseout", onMouseOut);
     window.removeEventListener("touchmove", onTouchMove);
-    window.removeEventListener("touchend", onTouchEnd);
-    window.removeEventListener("keydown", onKeyDown);
     if (overlay.parentNode) {
       overlay.parentNode.removeChild(overlay);
     }
@@ -1845,9 +2985,32 @@ function launchSocrateRulesEasterEgg(targetRoot) {
   animate();
 }
 
+/* =========================================================================
+ * 🔌 CUSTOM ELEMENT & LOVELACE CARD REGISTRATION
+ * ========================================================================= */
+class DomolinkTadoCard extends DomolinkTadoPanel {
+  setConfig(config) {
+    super.setConfig(config);
+  }
+}
+
 if (!customElements.get("domolink-tado-panel")) {
   customElements.define("domolink-tado-panel", DomolinkTadoPanel);
 }
 if (!customElements.get("domolink_tado-panel")) {
   customElements.define("domolink_tado-panel", DomolinkTadoPanel);
+}
+if (!customElements.get("domolink-tado-card")) {
+  customElements.define("domolink-tado-card", DomolinkTadoCard);
+}
+
+// Enregistrement dans le sélecteur de cartes Lovelace Home Assistant
+window.customCards = window.customCards || [];
+if (!window.customCards.some((c) => c.type === "domolink-tado-card")) {
+  window.customCards.push({
+    type: "domolink-tado-card",
+    name: "DomoLink-Tado Card",
+    description: "Panneau de pilotage complet haute résolution pour radiateurs et thermostats Tado",
+    preview: true,
+  });
 }
