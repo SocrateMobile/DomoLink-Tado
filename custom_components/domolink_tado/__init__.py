@@ -161,6 +161,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         home = call.data.get("home", True)
         await coordinator.async_set_presence(home)
 
+    async def handle_eco_all(call: ServiceCall) -> None:
+        """Appliquer le mode Éco sur toutes les pièces."""
+        temp = call.data.get("temperature")
+        await coordinator.async_set_eco_all(temp)
+
+    async def handle_temp_offset(call: ServiceCall) -> None:
+        """Ajuster l'offset de calibration de température d'un appareil."""
+        serial = call.data.get("device_serial")
+        offset = call.data.get("offset", 0.0)
+        if serial:
+            await coordinator.async_set_temperature_offset(serial, float(offset))
+
+    async def handle_save_labels(call: ServiceCall) -> None:
+        """Sauvegarder les étiquettes des pièces."""
+        labels = call.data.get("labels", {})
+        await coordinator.async_save_room_labels(labels)
+
     if not hass.services.has_service(DOMAIN, "resume_all_schedules"):
         hass.services.async_register(DOMAIN, "resume_all_schedules", handle_resume_all)
     if not hass.services.has_service(DOMAIN, "set_all_off"):
@@ -171,6 +188,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_register(DOMAIN, "set_child_lock", handle_child_lock)
     if not hass.services.has_service(DOMAIN, "set_presence"):
         hass.services.async_register(DOMAIN, "set_presence", handle_presence)
+    if not hass.services.has_service(DOMAIN, "set_eco_all"):
+        hass.services.async_register(DOMAIN, "set_eco_all", handle_eco_all)
+    if not hass.services.has_service(DOMAIN, "set_temperature_offset"):
+        hass.services.async_register(DOMAIN, "set_temperature_offset", handle_temp_offset)
+    if not hass.services.has_service(DOMAIN, "save_room_labels"):
+        hass.services.async_register(DOMAIN, "save_room_labels", handle_save_labels)
 
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     return True

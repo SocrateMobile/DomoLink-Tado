@@ -5,7 +5,7 @@ from homeassistant.const import Platform
 
 DOMAIN = "domolink_tado"
 NAME = "DomoLink-Tado"
-VERSION = "1.0.3"
+VERSION = "1.1.0"
 
 # Endpoints API Tado
 TADO_AUTH_BASE = "https://login.tado.com/oauth2"
@@ -25,6 +25,11 @@ CONF_HOME_ID = "home_id"
 CONF_HOME_NAME = "home_name"
 CONF_OVERLAY_MODE = "overlay_mode"
 CONF_OVERLAY_DURATION = "overlay_duration"
+CONF_ROOM_LABELS = "room_labels"
+CONF_AUTO_WINDOW_ENABLED = "auto_window_enabled"
+CONF_AUTO_WINDOW_DURATION = "auto_window_duration"
+CONF_ECO_TEMP = "eco_temperature"
+CONF_ADAPTIVE_POLLING = "adaptive_polling"
 
 # Overlay termination modes
 OVERLAY_NEXT_TIME_BLOCK = "NEXT_TIME_BLOCK"  # Jusqu'au prochain changement de programmation
@@ -33,6 +38,10 @@ OVERLAY_TIMER = "TIMER"                      # Minuterie définie en secondes
 
 DEFAULT_OVERLAY_MODE = OVERLAY_NEXT_TIME_BLOCK
 DEFAULT_OVERLAY_DURATION = 3600  # 1 heure par défaut
+DEFAULT_AUTO_WINDOW_ENABLED = True
+DEFAULT_AUTO_WINDOW_DURATION = 900  # 15 minutes
+DEFAULT_ECO_TEMP = 17.0
+DEFAULT_ADAPTIVE_POLLING = True
 
 # Températures limites
 MIN_TEMP = 5.0

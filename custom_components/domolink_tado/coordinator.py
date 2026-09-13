@@ -11,10 +11,23 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    CONF_ADAPTIVE_POLLING,
+    CONF_AUTO_WINDOW_DURATION,
+    CONF_AUTO_WINDOW_ENABLED,
+    CONF_ECO_TEMP,
     CONF_HOME_ID,
     CONF_HOME_NAME,
+    CONF_OVERLAY_DURATION,
+    CONF_OVERLAY_MODE,
+    CONF_ROOM_LABELS,
+    DEFAULT_AUTO_WINDOW_DURATION,
+    DEFAULT_AUTO_WINDOW_ENABLED,
+    DEFAULT_ECO_TEMP,
+    DEFAULT_OVERLAY_MODE,
     DOMAIN,
+    OVERLAY_MANUAL,
     OVERLAY_NEXT_TIME_BLOCK,
+    OVERLAY_TIMER,
     UPDATE_INTERVAL_SECONDS,
 )
 from .tado_api import TadoAuthError, TadoClient, TadoError
@@ -44,6 +57,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.home_id = home_id
         self.home_name = home_name
         self._zones_raw: list[dict[str, Any]] = []
+        self._open_window_handled: dict[int, bool] = {}
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch all zones, zone states, devices, weather, and home state from Tado."""
@@ -87,6 +101,10 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             zones_data: dict[int, dict[str, Any]] = {}
             active_heating_count = 0
             total_heating_power = 0.0
+
+            labels_map = self.entry.options.get(CONF_ROOM_LABELS, {})
+            auto_window = self.entry.options.get(CONF_AUTO_WINDOW_ENABLED, DEFAULT_AUTO_WINDOW_ENABLED)
+            window_duration = self.entry.options.get(CONF_AUTO_WINDOW_DURATION, DEFAULT_AUTO_WINDOW_DURATION)
 
             for z in self._zones_raw:
                 zid = z.get("id")
@@ -141,6 +159,31 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 # Open window detection
                 open_window = z_state.get("openWindow") is not None
 
+                # Bypass Auto-Assist: coupure automatique de la tête sur fenêtre ouverte
+                if auto_window and open_window and not self._open_window_handled.get(zid, False):
+                    self._open_window_handled[zid] = True
+                    _LOGGER.info(
+                        "DomoLink-Tado: Fenêtre ouverte détectée dans la pièce %s! Coupure automatique pendant %ss",
+                        z.get("name"),
+                        window_duration,
+                    )
+                    self.hass.async_create_task(
+                        self.client.set_zone_overlay(
+                            home_id=self.home_id,
+                            zone_id=zid,
+                            power="OFF",
+                            termination_type=OVERLAY_TIMER,
+                            duration_seconds=window_duration,
+                        )
+                    )
+                elif not open_window and self._open_window_handled.get(zid, False):
+                    self._open_window_handled[zid] = False
+
+                # Étiquettes de la pièce
+                room_labels = labels_map.get(str(zid), [])
+                if isinstance(room_labels, str):
+                    room_labels = [lbl.strip() for lbl in room_labels.split(",") if lbl.strip()]
+
                 zones_data[zid] = {
                     "info": z,
                     "state": z_state,
@@ -156,7 +199,15 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "is_overlay_active": overlay is not None,
                     "open_window": open_window,
                     "devices": enhanced_devices,
+                    "labels": room_labels,
                 }
+
+            # Polling adaptatif : 15s si chauffe active, 60s si tout est en veille
+            adaptive = self.entry.options.get(CONF_ADAPTIVE_POLLING, True)
+            if adaptive:
+                new_interval = 15 if (active_heating_count > 0 or any(zd.get("is_overlay_active") for zd in zones_data.values())) else 60
+                if self.update_interval != timedelta(seconds=new_interval):
+                    self.update_interval = timedelta(seconds=new_interval)
 
             outdoor_temp = (
                 weather.get("outsideTemperature", {}).get("celsius")
@@ -222,7 +273,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             home_id=self.home_id,
             zone_id=zone_id,
             power="OFF",
-            termination_type=OVERLAY_NEXT_TIME_BLOCK,
+            termination_type=OVERLAY_MANUAL,
         )
         await self.async_request_refresh()
 
@@ -249,6 +300,23 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.client.set_boost(self.home_id, zone_ids, temp=temp, duration_seconds=duration_seconds)
         await self.async_request_refresh()
 
+    async def async_set_eco_all(self, eco_temp: float | None = None) -> None:
+        """Apply eco temperature across all zones."""
+        temp = eco_temp or self.entry.options.get(CONF_ECO_TEMP, DEFAULT_ECO_TEMP)
+        zone_ids = list((self.data.get("zones", {})).keys())
+        tasks = [
+            self.client.set_zone_overlay(
+                home_id=self.home_id,
+                zone_id=zid,
+                target_temp=temp,
+                power="ON",
+                termination_type=OVERLAY_NEXT_TIME_BLOCK,
+            )
+            for zid in zone_ids
+        ]
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await self.async_request_refresh()
+
     async def async_set_child_lock(self, device_serial: str, child_lock: bool) -> None:
         """Toggle physical child lock on a valve."""
         await self.client.set_child_lock(device_serial, child_lock)
@@ -258,3 +326,16 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Set home presence lock (Home/Away)."""
         await self.client.set_presence(self.home_id, home)
         await self.async_request_refresh()
+
+    async def async_set_temperature_offset(self, device_serial: str, offset: float) -> None:
+        """Set calibration offset on a device."""
+        await self.client.set_temperature_offset(device_serial, offset)
+        await self.async_request_refresh()
+
+    async def async_save_room_labels(self, labels_dict: dict[str, Any]) -> None:
+        """Save room labels to config entry options."""
+        current_options = dict(self.entry.options)
+        current_options[CONF_ROOM_LABELS] = labels_dict
+        self.hass.config_entries.async_update_entry(self.entry, options=current_options)
+        await self.async_request_refresh()
+

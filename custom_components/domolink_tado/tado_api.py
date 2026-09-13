@@ -369,3 +369,17 @@ class TadoClient:
         state = "HOME" if home else "AWAY"
         _LOGGER.info("Locking home presence to %s for home %s", state, home_id)
         return await self._request("PUT", f"/homes/{home_id}/presenceLock", json_data={"homePresence": state})
+
+    async def set_temperature_offset(self, device_serial: str, offset: float) -> dict[str, Any]:
+        """Set temperature calibration offset for a physical device in Celsius (-5.0 to 5.0)."""
+        clamped = max(-5.0, min(5.0, round(float(offset), 2)))
+        _LOGGER.info("Setting temperature offset to %s°C on device %s", clamped, device_serial)
+        return await self._request(
+            "PUT",
+            f"/devices/{device_serial}/temperatureOffset",
+            json_data={"celsius": clamped},
+        )
+
+    async def get_temperature_offset(self, device_serial: str) -> dict[str, Any]:
+        """Get current temperature calibration offset for a device."""
+        return await self._request("GET", f"/devices/{device_serial}/temperatureOffset")
