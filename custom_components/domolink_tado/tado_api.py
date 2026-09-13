@@ -76,7 +76,10 @@ class TadoClient:
             "client_id": TADO_CLIENT_ID,
             "scope": TADO_SCOPE,
         }
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": "https://app.tado.com/",
+        }
 
         try:
             async with session.post(TADO_DEVICE_AUTH_URL, data=data, headers=headers) as resp:
@@ -87,7 +90,7 @@ class TadoClient:
                 return TadoDeviceAuthResponse(
                     device_code=res["device_code"],
                     user_code=res["user_code"],
-                    verification_uri=res.get("verification_uri", "https://tado.com/device"),
+                    verification_uri=res.get("verification_uri", "https://login.tado.com/oauth2/device"),
                     verification_uri_complete=res.get("verification_uri_complete"),
                     expires_in=res.get("expires_in", 300),
                     interval=res.get("interval", 5),
@@ -103,7 +106,10 @@ class TadoClient:
             "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
             "device_code": device_code,
         }
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": "https://app.tado.com/",
+        }
 
         async with session.post(TADO_TOKEN_URL, data=data, headers=headers) as resp:
             if resp.status == 200:
@@ -145,7 +151,10 @@ class TadoClient:
             "grant_type": "refresh_token",
             "refresh_token": self.refresh_token,
         }
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        headers = {
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": "https://app.tado.com/",
+        }
 
         _LOGGER.debug("Refreshing Tado OAuth token...")
         try:
