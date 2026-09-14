@@ -23,25 +23,31 @@ CONST_PATH = os.path.join(ROOT_DIR, "custom_components", "domolink_tado", "const
 
 
 def get_token() -> str:
-    """Retrieve GitHub token from environment or git remote."""
+    """Retrieve GitHub token strictly from environment or gh CLI."""
     token = os.environ.get("GITHUB_TOKEN")
     if token:
         return token
+    # Check if GitHub CLI is installed and authenticated
     try:
-        remote = (
+        gh_token = (
             subprocess.check_output(
-                ["git", "remote", "get-url", "origin"],
+                ["gh", "auth", "token"],
                 cwd=ROOT_DIR,
                 text=True,
+                stderr=subprocess.DEVNULL,
             )
             .strip()
         )
-        match = re.search(r":([^:@]+)@github\.com", remote)
-        if match:
-            return match.group(1)
+        if gh_token:
+            return gh_token
     except Exception:
         pass
+
     print("Error: GITHUB_TOKEN environment variable is not set.")
+    print("Please set your GitHub Personal Access Token via:")
+    print("    export GITHUB_TOKEN=\"your_token\"")
+    print("Or authenticate with GitHub CLI via:")
+    print("    gh auth login")
     sys.exit(1)
 
 
@@ -91,9 +97,10 @@ def create_github_release(new_ver: str, release_notes: str, token: str) -> None:
         import certifi
 
         ctx.load_verify_locations(certifi.where())
-    except Exception:
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
+    except ImportError:
+        pass  # Rely on standard system certificate store
+    except Exception as err:
+        print(f"Warning: Could not load certifi cert store ({err}), using default system certificates.")
 
     req = urllib.request.Request(
         url,
@@ -111,6 +118,11 @@ def create_github_release(new_ver: str, release_notes: str, token: str) -> None:
         with urllib.request.urlopen(req, context=ctx) as resp:
             res = json.loads(resp.read().decode("utf-8"))
             print(f"GitHub Release created successfully: {res.get('html_url')}")
+    except urllib.error.URLError as err:
+        if isinstance(getattr(err, "reason", None), ssl.SSLCertVerificationError):
+            print("Error: SSL certificate verification failed. Please install certifi: pip install certifi")
+            sys.exit(1)
+        print(f"Note: GitHub release could not be created via API: {err}")
     except Exception as err:
         print(f"Note: GitHub release could not be created via API: {err}")
 
@@ -141,7 +153,7 @@ def main() -> None:
     run_cmd(["git", "tag", "-fa", tag, "-m", f"Release {tag}"])
     run_cmd(["git", "tag", "-fa", "latest", "-m", f"Latest release ({tag})"])
     run_cmd(["git", "push", "origin", "main"])
-    run_cmd(["git", "push", "origin", "--tags", "--force"])
+    run_cmd(["git", "push", "origin", tag, "latest", "--force"])
 
     # GitHub release
     create_github_release(new_ver, notes, token)
