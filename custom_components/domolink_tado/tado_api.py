@@ -171,6 +171,27 @@ class TadoClient:
 
             return await self.async_refresh_token()
 
+    @staticmethod
+    def _calculate_rate_limit_delay(
+        resp: aiohttp.ClientResponse,
+        attempt: int,
+        default_base: float = 2.5,
+        max_delay: float = 30.0,
+    ) -> float:
+        """Extract Retry-After or RateLimit-Reset headers, fallback to exponential backoff."""
+        wait_sec: float | None = None
+        for hdr in ("Retry-After", "RateLimit-Reset", "X-RateLimit-Reset"):
+            val = resp.headers.get(hdr)
+            if val:
+                try:
+                    wait_sec = float(val)
+                    break
+                except (ValueError, TypeError):
+                    pass
+        if wait_sec is None or wait_sec <= 0:
+            wait_sec = default_base * (2 ** attempt)
+        return min(wait_sec, max_delay)
+
     async def async_refresh_token(self) -> str:
         """Refresh the access token using the stored refresh token."""
         if not self.refresh_token:
@@ -191,8 +212,12 @@ class TadoClient:
             try:
                 async with self.session.post(TADO_TOKEN_URL, data=data, headers=headers) as resp:
                     if resp.status == 429:
-                        wait_sec = 3.0 * (attempt + 1)
-                        _LOGGER.warning("Tado token refresh rate limited (429). Retrying in %.1fs...", wait_sec)
+                        wait_sec = self._calculate_rate_limit_delay(resp, attempt, default_base=3.0, max_delay=30.0)
+                        _LOGGER.warning(
+                            "Tado token refresh rate limited (429). Retrying in %.1fs (attempt %d/4)...",
+                            wait_sec,
+                            attempt + 1,
+                        )
                         await asyncio.sleep(wait_sec)
                         continue
 
@@ -252,19 +277,7 @@ class TadoClient:
                     method, url, json=json_data, params=params, headers=headers
                 ) as resp:
                     if resp.status == 429:
-                        wait_sec = None
-                        for hdr in ("Retry-After", "RateLimit-Reset", "X-RateLimit-Reset"):
-                            val = resp.headers.get(hdr)
-                            if val:
-                                try:
-                                    wait_sec = float(val)
-                                    break
-                                except (ValueError, TypeError):
-                                    pass
-                        if wait_sec is None or wait_sec <= 0:
-                            wait_sec = 2.5 * (2 ** attempt)
-                        wait_sec = min(wait_sec, 30.0)
-
+                        wait_sec = self._calculate_rate_limit_delay(resp, attempt, default_base=2.5, max_delay=30.0)
                         _LOGGER.warning(
                             "Tado API Rate Limit (429 Too Many Requests) sur %s. Attente de %.1fs (tentative %d/5)...",
                             endpoint,
