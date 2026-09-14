@@ -111,29 +111,32 @@ class TadoClient:
             "Referer": "https://app.tado.com/",
         }
 
-        async with session.post(TADO_TOKEN_URL, data=data, headers=headers) as resp:
-            if resp.status == 200:
-                res = await resp.json()
-                return {
-                    "access_token": res["access_token"],
-                    "refresh_token": res.get("refresh_token"),
-                    "expires_at": time.time() + res.get("expires_in", 3600),
-                }
+        try:
+            async with session.post(TADO_TOKEN_URL, data=data, headers=headers) as resp:
+                if resp.status == 200:
+                    res = await resp.json()
+                    return {
+                        "access_token": res["access_token"],
+                        "refresh_token": res.get("refresh_token"),
+                        "expires_at": time.time() + res.get("expires_in", 3600),
+                    }
 
-            try:
-                res = await resp.json()
-                error = res.get("error")
-                error_desc = res.get("error_description", error)
-            except Exception:
-                error = None
-                error_desc = await resp.text()
+                try:
+                    res = await resp.json()
+                    error = res.get("error")
+                    error_desc = res.get("error_description", error)
+                except Exception:
+                    error = None
+                    error_desc = await resp.text()
 
-            if error in ("authorization_pending", "slow_down"):
-                raise TadoDeviceFlowPending(error)
-            if error in ("expired_token", "access_denied", "invalid_grant", "bad_verification_code"):
-                raise TadoDeviceFlowExpired(error)
+                if error in ("authorization_pending", "slow_down"):
+                    raise TadoDeviceFlowPending(error)
+                if error in ("expired_token", "access_denied", "invalid_grant", "bad_verification_code"):
+                    raise TadoDeviceFlowExpired(error)
 
-            raise TadoAuthError(f"Token polling error ({resp.status}): {error_desc}")
+                raise TadoAuthError(f"Token polling error ({resp.status}): {error_desc}")
+        except aiohttp.ClientError as err:
+            raise TadoError(f"Erreur de connexion lors du polling: {err}") from err
 
     async def async_get_valid_token(self) -> str:
         """Ensure the current access token is valid, refreshing if needed."""
@@ -317,13 +320,17 @@ class TadoClient:
         termination: dict[str, Any] = {}
         if termination_type == OVERLAY_NEXT_TIME_BLOCK:
             termination["type"] = "TADO_MODE"
+            termination["typeSkillBasedApp"] = "NEXT_TIME_BLOCK"
         elif termination_type == OVERLAY_MANUAL:
             termination["type"] = "MANUAL"
+            termination["typeSkillBasedApp"] = "MANUAL"
         elif termination_type == OVERLAY_TIMER:
             termination["type"] = "TIMER"
+            termination["typeSkillBasedApp"] = "TIMER"
             termination["durationInSeconds"] = duration_seconds or 3600
         else:
             termination["type"] = "TADO_MODE"
+            termination["typeSkillBasedApp"] = "NEXT_TIME_BLOCK"
 
         payload = {
             "setting": setting,

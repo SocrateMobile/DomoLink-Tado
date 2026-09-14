@@ -8,7 +8,7 @@ import voluptuous as vol
 
 from homeassistant import config_entries
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.data_entry_flow import AbortFlow, FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
@@ -112,17 +112,7 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._home_id = home_id
                 self._home_name = home_name
 
-                # Discover zones for the labels configuration step
-                try:
-                    self._discovered_zones = await client.get_zones(home_id)
-                except Exception as err:
-                    _LOGGER.warning("Could not pre-fetch zones for labeling: %s", err)
-                    self._discovered_zones = []
-
-                if self._discovered_zones:
-                    return await self.async_step_labels()
-
-                # Fallback if no zones or error
+                # Directly create config entry with full data and default options
                 return self.async_create_entry(
                     title=f"DomoLink Tado ({home_name})",
                     data={
@@ -143,9 +133,12 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     },
                 )
 
+            except AbortFlow:
+                raise
             except TadoDeviceFlowPending:
                 _LOGGER.debug("DomoLink-Tado: Device authorization still pending on Tado...")
                 errors["base"] = "authorization_pending"
+                # Keep active device code! User validates on tado.com then clicks Valider again
             except TadoDeviceFlowExpired:
                 _LOGGER.warning("DomoLink-Tado: Device code expired or invalidated")
                 errors["base"] = "code_expired"
@@ -153,7 +146,7 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except (TadoAuthError, TadoError) as err:
                 _LOGGER.error("DomoLink-Tado: Error during Tado token polling/login: %s", err)
                 errors["base"] = "cannot_connect"
-                self._device_code = None
+                # Keep active device code on network hiccup so user can retry
             except Exception as err:
                 _LOGGER.exception("DomoLink-Tado: Unexpected error during Tado login: %s", err)
                 errors["base"] = "unknown"
@@ -356,6 +349,9 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
                 return self.async_create_entry(title="", data=self.config_entry.options)
             except TadoDeviceFlowPending:
                 errors["base"] = "authorization_pending"
+            except (TadoAuthError, TadoError) as err:
+                _LOGGER.error("DomoLink-Tado: Re-auth error: %s", err)
+                errors["base"] = "cannot_connect"
             except Exception as err:
                 _LOGGER.error("DomoLink-Tado: Re-auth error: %s", err)
                 errors["base"] = "cannot_connect"

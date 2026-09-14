@@ -5,7 +5,7 @@ from homeassistant.const import Platform
 
 DOMAIN = "domolink_tado"
 NAME = "DomoLink-Tado"
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 
 # Endpoints API Tado
 TADO_AUTH_BASE = "https://login.tado.com/oauth2"
@@ -15,7 +15,7 @@ TADO_TOKEN_URL = f"{TADO_AUTH_BASE}/token"
 
 # Client ID officiel Tado pour OAuth2 Device Flow
 TADO_CLIENT_ID = "1bb50063-6b0c-4d11-bd99-387f4a91cc46"
-TADO_SCOPE = "offline_access"
+TADO_SCOPE = "home.user"
 
 # Configuration Entry keys
 CONF_ACCESS_TOKEN = "access_token"
