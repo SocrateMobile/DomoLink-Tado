@@ -206,3 +206,11 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
         elif hvac_mode == HVACMode.HEAT:
             target = self.target_temperature or 20.0
             await self.async_set_temperature(temperature=target)
+
+    async def async_turn_on(self) -> None:
+        """Turn on the climate entity."""
+        await self.coordinator.async_resume_schedule(self.zone_id)
+
+    async def async_turn_off(self) -> None:
+        """Turn off the climate entity."""
+        await self.coordinator.async_set_zone_off(self.zone_id)

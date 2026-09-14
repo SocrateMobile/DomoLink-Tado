@@ -3,15 +3,15 @@
     "step": {
       "user": {
         "title": "Connexion DomoLink-Tado",
-        "description": "Veuillez associer votre compte Tado via le protocole officiel sécurisé Device Flow.\n\n1. Rendez-vous sur le lien : **{verification_uri}**\n2. Saisissez le code suivant si demandé : **{user_code}**\n3. Validez l'accès sur votre compte Tado, puis cliquez sur le bouton bleu **Valider** ci-dessous."
+        "description": "Veuillez associer votre compte Tado via le protocole officiel sécurisé Device Flow.\n\n1. Rendez-vous sur le lien : [{verification_uri}]({verification_uri})\n2. Saisissez le code suivant si demandé : **{user_code}**\n3. Validez l'accès sur votre compte Tado, puis cliquez sur le bouton bleu **Valider** ci-dessous."
       },
       "reauth_confirm": {
         "title": "Ré-authentification DomoLink-Tado",
-        "description": "Veuillez renouveler l'association de votre compte Tado via le protocole officiel sécurisé Device Flow.\n\n1. Rendez-vous sur le lien : **{verification_uri}**\n2. Saisissez le code suivant si demandé : **{user_code}**\n3. Validez l'accès sur votre compte Tado, puis cliquez sur le bouton bleu **Valider** ci-dessous."
+        "description": "Veuillez renouveler l'association de votre compte Tado via le protocole officiel sécurisé Device Flow.\n\n1. Rendez-vous sur le lien : [{verification_uri}]({verification_uri})\n2. Saisissez le code suivant si demandé : **{user_code}**\n3. Validez l'accès sur votre compte Tado, puis cliquez sur le bouton bleu **Valider** ci-dessous."
       },
       "reconfigure": {
         "title": "Reconfiguration DomoLink-Tado",
-        "description": "Veuillez associer votre compte Tado via le protocole officiel sécurisé Device Flow.\n\n1. Rendez-vous sur le lien : **{verification_uri}**\n2. Saisissez le code suivant si demandé : **{user_code}**\n3. Validez l'accès sur votre compte Tado, puis cliquez sur le bouton bleu **Valider** ci-dessous."
+        "description": "Veuillez associer votre compte Tado via le protocole officiel sécurisé Device Flow.\n\n1. Rendez-vous sur le lien : [{verification_uri}]({verification_uri})\n2. Saisissez le code suivant si demandé : **{user_code}**\n3. Validez l'accès sur votre compte Tado, puis cliquez sur le bouton bleu **Valider** ci-dessous."
       },
       "labels": {
         "title": "Étiquettes des pièces (Labels)",

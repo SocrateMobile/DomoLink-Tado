@@ -1,5 +1,5 @@
 /**
- * DomoLink-Tado — Panneau Tactile Haute Résolution & Lovelace Card (v1.1.1)
+ * DomoLink-Tado — Panneau Tactile Haute Résolution & Lovelace Card (v1.1.2)
  * 
  * Nouveautés majeures :
  * 1. Gros curseur vertical blanc tactile qui glisse de haut en bas le long de la règle de 5° à 30°C.
