@@ -348,17 +348,17 @@ class TadoClient:
         termination: dict[str, Any] = {}
         if termination_type == OVERLAY_NEXT_TIME_BLOCK:
             termination["type"] = "TADO_MODE"
-            termination["typeSkillBasedApp"] = "NEXT_TIME_BLOCK"
+            termination["typeSkillBasedApp"] = "TADO_MODE"
         elif termination_type == OVERLAY_MANUAL:
             termination["type"] = "MANUAL"
             termination["typeSkillBasedApp"] = "MANUAL"
         elif termination_type == OVERLAY_TIMER:
             termination["type"] = "TIMER"
             termination["typeSkillBasedApp"] = "TIMER"
-            termination["durationInSeconds"] = duration_seconds or 3600
+            termination["durationInSeconds"] = int(duration_seconds or 3600)
         else:
             termination["type"] = "TADO_MODE"
-            termination["typeSkillBasedApp"] = "NEXT_TIME_BLOCK"
+            termination["typeSkillBasedApp"] = "TADO_MODE"
 
         payload = {
             "setting": setting,
