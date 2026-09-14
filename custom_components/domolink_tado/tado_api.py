@@ -18,9 +18,11 @@ from .const import (
     TADO_DEVICE_AUTH_URL,
     TADO_SCOPE,
     TADO_TOKEN_URL,
+    VERSION,
 )
 
 _LOGGER = logging.getLogger(__name__)
+DEFAULT_USER_AGENT = f"HomeAssistant/{VERSION} DomoLink-Tado"
 
 
 class TadoError(Exception):
@@ -78,7 +80,7 @@ class TadoClient:
         }
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",
-            "Referer": "https://app.tado.com/",
+            "User-Agent": DEFAULT_USER_AGENT,
         }
 
         try:
@@ -87,11 +89,20 @@ class TadoClient:
                     text = await resp.text()
                     raise TadoAuthError(f"Device code request failed ({resp.status}): {text}")
                 res = await resp.json()
+                verification_uri = res.get("verification_uri", "https://login.tado.com/oauth2/device")
+                user_code = res["user_code"]
+                complete_url = res.get("verification_uri_complete")
+                if not complete_url:
+                    complete_url = f"{verification_uri}?user_code={user_code}&client_id={TADO_CLIENT_ID}"
+                elif "client_id=" not in complete_url:
+                    sep = "&" if "?" in complete_url else "?"
+                    complete_url = f"{complete_url}{sep}client_id={TADO_CLIENT_ID}"
+
                 return TadoDeviceAuthResponse(
                     device_code=res["device_code"],
-                    user_code=res["user_code"],
-                    verification_uri=res.get("verification_uri", "https://login.tado.com/oauth2/device"),
-                    verification_uri_complete=res.get("verification_uri_complete"),
+                    user_code=user_code,
+                    verification_uri=verification_uri,
+                    verification_uri_complete=complete_url,
                     expires_in=res.get("expires_in", 300),
                     interval=res.get("interval", 5),
                 )
@@ -108,7 +119,7 @@ class TadoClient:
         }
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",
-            "Referer": "https://app.tado.com/",
+            "User-Agent": DEFAULT_USER_AGENT,
         }
 
         try:
@@ -120,6 +131,10 @@ class TadoClient:
                         "refresh_token": res.get("refresh_token"),
                         "expires_at": time.time() + res.get("expires_in", 3600),
                     }
+
+                if resp.status == 429:
+                    _LOGGER.warning("Tado token polling rate limit (429), user should slow down")
+                    raise TadoDeviceFlowPending("slow_down")
 
                 try:
                     res = await resp.json()
@@ -168,15 +183,15 @@ class TadoClient:
         }
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",
-            "Referer": "https://app.tado.com/",
+            "User-Agent": DEFAULT_USER_AGENT,
         }
 
         _LOGGER.debug("Refreshing Tado OAuth token...")
-        for attempt in range(3):
+        for attempt in range(4):
             try:
                 async with self.session.post(TADO_TOKEN_URL, data=data, headers=headers) as resp:
                     if resp.status == 429:
-                        wait_sec = 2.5 * (attempt + 1)
+                        wait_sec = 3.0 * (attempt + 1)
                         _LOGGER.warning("Tado token refresh rate limited (429). Retrying in %.1fs...", wait_sec)
                         await asyncio.sleep(wait_sec)
                         continue
@@ -208,8 +223,8 @@ class TadoClient:
 
                     return self.access_token
             except aiohttp.ClientError as err:
-                if attempt < 2:
-                    await asyncio.sleep(1.5 * (attempt + 1))
+                if attempt < 3:
+                    await asyncio.sleep(2.0 * (attempt + 1))
                     continue
                 raise TadoError(f"Network error refreshing token: {err}") from err
         raise TadoAuthError("Could not refresh token after multiple attempts (rate limit / server error)")
@@ -228,24 +243,30 @@ class TadoClient:
         headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
-            "Referer": "https://app.tado.com/",
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": DEFAULT_USER_AGENT,
         }
 
-        for attempt in range(4):
+        for attempt in range(5):
             try:
                 async with self.session.request(
                     method, url, json=json_data, params=params, headers=headers
                 ) as resp:
                     if resp.status == 429:
-                        retry_after = resp.headers.get("Retry-After")
-                        try:
-                            wait_sec = float(retry_after) if retry_after else (3.0 * (attempt + 1))
-                        except (ValueError, TypeError):
-                            wait_sec = 3.0 * (attempt + 1)
+                        wait_sec = None
+                        for hdr in ("Retry-After", "RateLimit-Reset", "X-RateLimit-Reset"):
+                            val = resp.headers.get(hdr)
+                            if val:
+                                try:
+                                    wait_sec = float(val)
+                                    break
+                                except (ValueError, TypeError):
+                                    pass
+                        if wait_sec is None or wait_sec <= 0:
+                            wait_sec = 2.5 * (2 ** attempt)
                         wait_sec = min(wait_sec, 30.0)
+
                         _LOGGER.warning(
-                            "Tado API Rate Limit (429 Too Many Requests) sur %s. Attente de %.1fs (tentative %d/4)...",
+                            "Tado API Rate Limit (429 Too Many Requests) sur %s. Attente de %.1fs (tentative %d/5)...",
                             endpoint,
                             wait_sec,
                             attempt + 1,
@@ -270,7 +291,7 @@ class TadoClient:
                     data = await resp.json()
                     return data if data is not None else {}
             except aiohttp.ClientError as err:
-                if attempt < 3:
+                if attempt < 4:
                     await asyncio.sleep(2.0 * (attempt + 1))
                     continue
                 raise TadoError(f"Network error requesting {endpoint}: {err}") from err
