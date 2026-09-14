@@ -2006,13 +2006,6 @@ class DomolinkTadoPanel extends HTMLElement {
         this._activeModalZone.target_temp = stepped.toFixed(1);
         this._updateModalBackgroundOnly(stepped);
       }
-
-      clearTimeout(this._sliderDebounceTimer);
-      this._sliderDebounceTimer = setTimeout(() => {
-        if (this._activeModalZone) {
-          this._applyTargetTemperature(this._activeModalZone, stepped);
-        }
-      }, 300);
     };
 
     const stopDrag = () => {
@@ -2021,7 +2014,7 @@ class DomolinkTadoPanel extends HTMLElement {
       this._cursorDragActive = false;
       if (this._activeModalZone) {
         this._setCursorPosition(this._activeModalZone.target_num, true);
-        this._applyTargetTemperature(this._activeModalZone, this._activeModalZone.target_num);
+        this._applyTargetTemperature(this._activeModalZone, this._activeModalZone.target_num, 400);
       }
     };
 
@@ -2059,7 +2052,8 @@ class DomolinkTadoPanel extends HTMLElement {
           this._activeModalZone.target_num = t;
           this._activeModalZone.target_temp = t.toFixed(1);
           this._setCursorPosition(t, true);
-          this._applyTargetTemperature(this._activeModalZone, t);
+          this._updateModalBackgroundOnly(t);
+          this._applyTargetTemperature(this._activeModalZone, t, 600);
         }
       });
     });
@@ -2083,7 +2077,8 @@ class DomolinkTadoPanel extends HTMLElement {
     this._activeModalZone.target_num = t;
     this._activeModalZone.target_temp = t.toFixed(1);
     this._setCursorPosition(t, true);
-    this._applyTargetTemperature(this._activeModalZone, t);
+    this._updateModalBackgroundOnly(t);
+    this._applyTargetTemperature(this._activeModalZone, t, 650);
   }
 
   _setCursorPosition(temp, animate = true) {
@@ -2093,9 +2088,11 @@ class DomolinkTadoPanel extends HTMLElement {
 
     const t = Math.max(5.0, Math.min(30.0, parseFloat(temp) || 20.0));
     const cursorHeight = cursor.offsetHeight || 140;
-    const cardHeight = card.offsetHeight || 360;
-    const paddingTop = 16;
-    const travel = cardHeight - cursorHeight - 32;
+    const cardHeight = card.clientHeight || 420;
+    const paddingTop = 30;
+    const paddingBottom = 30;
+    const travel = cardHeight - paddingTop - paddingBottom - cursorHeight;
+    if (travel <= 0) return;
 
     const ratio = (t - 5.0) / 25.0;
     const topPos = paddingTop + (1.0 - ratio) * travel;
@@ -2112,26 +2109,39 @@ class DomolinkTadoPanel extends HTMLElement {
 
   _updateModalBackgroundOnly(temp) {
     const card = this.querySelector("#roomModalCard");
-    if (card) {
-      const colors = this._getTempColor(temp, this._activeModalZone?.state);
-      card.style.backgroundColor = colors.bg;
+    if (card && this._activeModalZone) {
+      const curTemp = parseFloat(this._activeModalZone.current_temp) || temp;
+      const curColor = interpolateColor(curTemp);
+      const tgtColor = interpolateColor(temp);
+      card.style.background = `linear-gradient(to top, rgba(${curColor.r}, ${curColor.g}, ${curColor.b}, 0.55) 0%, rgba(${tgtColor.r}, ${tgtColor.g}, ${tgtColor.b}, 0.65) 100%), #131928`;
     }
   }
 
-  _applyTargetTemperature(zone, temp) {
-    if (!zone) return;
-    const dur = this._selectedDuration;
-    if (dur === "NEXT_TIME_BLOCK" || dur === "MANUAL") {
-      this._callService("climate", "set_temperature", {
-        entity_id: zone.entity_id,
-        temperature: temp,
-      });
-    } else {
-      this._callService("climate", "set_temperature", {
-        entity_id: zone.entity_id,
-        temperature: temp,
-      });
+  _applyTargetTemperature(zone, temp, debounceMs = 650) {
+    if (!zone || !zone.entity_id) return;
+    if (!this._tempDebounceTimers) {
+      this._tempDebounceTimers = {};
     }
+    const entityId = zone.entity_id;
+    if (this._tempDebounceTimers[entityId]) {
+      clearTimeout(this._tempDebounceTimers[entityId]);
+    }
+
+    if (debounceMs <= 0) {
+      this._callService("climate", "set_temperature", {
+        entity_id: zone.entity_id,
+        temperature: temp,
+      });
+      return;
+    }
+
+    this._tempDebounceTimers[entityId] = setTimeout(() => {
+      this._callService("climate", "set_temperature", {
+        entity_id: zone.entity_id,
+        temperature: temp,
+      });
+      delete this._tempDebounceTimers[entityId];
+    }, debounceMs);
   }
 
   _openModal(zone) {
@@ -2348,15 +2358,29 @@ class DomolinkTadoPanel extends HTMLElement {
         card.querySelector(".btn-quick-minus")?.addEventListener("click", (e) => {
           e.stopPropagation();
           let t = (z.target_num || 20.0) - 0.5;
-          t = Math.max(5.0, Math.min(30.0, t));
-          this._applyTargetTemperature(z, t);
+          t = Math.max(5.0, Math.min(30.0, Math.round(t * 2) / 2));
+          z.target_num = t;
+          z.target_temp = t.toFixed(1);
+          const valSpan = card.querySelector(".quick-target-val");
+          if (valSpan) valSpan.textContent = `${t.toFixed(1)}°`;
+          const style = getTileBackgroundGradient(z);
+          card.style.background = style.background;
+          card.style.borderColor = style.borderColor;
+          this._applyTargetTemperature(z, t, 700);
         });
 
         card.querySelector(".btn-quick-plus")?.addEventListener("click", (e) => {
           e.stopPropagation();
           let t = (z.target_num || 20.0) + 0.5;
-          t = Math.max(5.0, Math.min(30.0, t));
-          this._applyTargetTemperature(z, t);
+          t = Math.max(5.0, Math.min(30.0, Math.round(t * 2) / 2));
+          z.target_num = t;
+          z.target_temp = t.toFixed(1);
+          const valSpan = card.querySelector(".quick-target-val");
+          if (valSpan) valSpan.textContent = `${t.toFixed(1)}°`;
+          const style = getTileBackgroundGradient(z);
+          card.style.background = style.background;
+          card.style.borderColor = style.borderColor;
+          this._applyTargetTemperature(z, t, 700);
         });
 
         card.querySelector(".btn-room-off")?.addEventListener("click", (e) => {

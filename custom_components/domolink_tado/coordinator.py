@@ -61,6 +61,10 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._zones_raw: list[dict[str, Any]] = []
         self._devices_raw: list[dict[str, Any]] = []
         self._last_discovery_time: float = 0.0
+        self._weather_raw: dict[str, Any] = {}
+        self._last_weather_time: float = 0.0
+        self._home_state_raw: dict[str, Any] = {}
+        self._last_home_state_time: float = 0.0
         self._open_window_handled: dict[int, bool] = {}
 
     def get_zone_labels(self, zone_id: int | str) -> list[str]:
@@ -72,13 +76,13 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         return res if isinstance(res, list) else []
 
     async def _async_update_data(self) -> dict[str, Any]:
-        """Fetch all zone states and weather with smart zones/devices metadata caching."""
+        """Fetch all zone states with smart metadata, weather, and presence caching."""
         try:
             now = time.time()
-            # Cache zones et matériel pendant 30 minutes pour éviter le rate limit Tado (429)
+            # 1. Cache zones et matériel pendant 30 minutes pour éviter le rate limit Tado (429)
             if not self._zones_raw or not self._devices_raw or (now - self._last_discovery_time > 1800):
                 try:
-                    _LOGGER.debug("DomoLink-Tado: Découverte complète des zones et équipements...")
+                    _LOGGER.debug("DomoLink-Tado: Découverte des zones et équipements...")
                     z_res, d_res = await asyncio.gather(
                         self.client.get_zones(self.home_id),
                         self.client.get_devices(self.home_id),
@@ -87,29 +91,33 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._devices_raw = d_res or []
                     self._last_discovery_time = now
                 except Exception as err:
-                    _LOGGER.warning("DomoLink-Tado: Échec de rafraîchissement des zones/matériels (%s), utilisation du cache", err)
+                    _LOGGER.warning("DomoLink-Tado: Échec rafraîchissement zones/matériels (%s), utilisation cache", err)
                     if not self._zones_raw:
                         raise
 
-            # En routine : seulement les requêtes d'états dynamiques légères
-            states_task = self.client.get_zone_states(self.home_id)
-            weather_task = self.client.get_weather(self.home_id)
-            home_state_task = self.client.get_home_state(self.home_id)
-
-            states_res, weather_res, home_state_res = await asyncio.gather(
-                states_task,
-                weather_task,
-                home_state_task,
-                return_exceptions=True,
-            )
-
-            if isinstance(states_res, Exception):
-                raise states_res
-
+            # 2. En routine : rafraîchir uniquement les états dynamiques de zones (1 seule requête API !)
+            states_res = await self.client.get_zone_states(self.home_id)
             zone_states = (states_res or {}).get("zoneStates", {})
+
+            # 3. Météo mise en cache pendant 15 minutes (900s)
+            if not self._weather_raw or (now - self._last_weather_time > 900):
+                try:
+                    self._weather_raw = await self.client.get_weather(self.home_id) or {}
+                    self._last_weather_time = now
+                except Exception as err:
+                    _LOGGER.debug("DomoLink-Tado: Échec rafraîchissement météo: %s", err)
+
+            # 4. État du domicile (présence) mis en cache pendant 5 minutes (300s)
+            if not self._home_state_raw or (now - self._last_home_state_time > 300):
+                try:
+                    self._home_state_raw = await self.client.get_home_state(self.home_id) or {}
+                    self._last_home_state_time = now
+                except Exception as err:
+                    _LOGGER.debug("DomoLink-Tado: Échec rafraîchissement présence: %s", err)
+
             devices = self._devices_raw if isinstance(self._devices_raw, list) else []
-            weather = weather_res if isinstance(weather_res, dict) else {}
-            home_state = home_state_res if isinstance(home_state_res, dict) else {}
+            weather = self._weather_raw if isinstance(self._weather_raw, dict) else {}
+            home_state = self._home_state_raw if isinstance(self._home_state_raw, dict) else {}
 
             # Map devices by zone and serial number
             devices_by_serial: dict[str, dict[str, Any]] = {
@@ -279,71 +287,134 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         termination_type: str = OVERLAY_NEXT_TIME_BLOCK,
         duration_seconds: int | None = None,
     ) -> None:
-        """Set temperature for a zone."""
+        """Set temperature for a zone with immediate optimistic update."""
+        rounded_temp = round(float(target_temp), 1)
+        # 1. Mise à jour optimiste immédiate en mémoire pour une réactivité UI instantanée
+        if self.data and "zones" in self.data and zone_id in self.data["zones"]:
+            self.data["zones"][zone_id]["target_temperature"] = rounded_temp
+            self.data["zones"][zone_id]["power"] = "ON"
+            self.data["zones"][zone_id]["is_overlay_active"] = True
+            self.async_set_updated_data(self.data)
+
+        # 2. Appel de consigne vers Tado
         await self.client.set_zone_overlay(
             home_id=self.home_id,
             zone_id=zone_id,
-            target_temp=target_temp,
+            target_temp=rounded_temp,
             power="ON",
             termination_type=termination_type,
             duration_seconds=duration_seconds,
         )
-        await self.async_request_refresh()
 
     async def async_set_zone_off(self, zone_id: int) -> None:
-        """Turn heating off for a zone."""
+        """Turn heating off for a zone with immediate optimistic update."""
+        if self.data and "zones" in self.data and zone_id in self.data["zones"]:
+            self.data["zones"][zone_id]["power"] = "OFF"
+            self.data["zones"][zone_id]["is_overlay_active"] = True
+            self.async_set_updated_data(self.data)
+
         await self.client.set_zone_overlay(
             home_id=self.home_id,
             zone_id=zone_id,
             power="OFF",
             termination_type=OVERLAY_MANUAL,
         )
-        await self.async_request_refresh()
 
     async def async_resume_schedule(self, zone_id: int) -> None:
-        """Resume automatic schedule for a single zone."""
+        """Resume automatic schedule for a single zone with immediate optimistic update."""
+        if self.data and "zones" in self.data and zone_id in self.data["zones"]:
+            self.data["zones"][zone_id]["is_overlay_active"] = False
+            self.async_set_updated_data(self.data)
+
         await self.client.resume_schedule(self.home_id, zone_id)
-        await self.async_request_refresh()
 
     async def async_resume_all_schedules(self) -> None:
-        """Resume automatic schedule across all zones."""
+        """Resume automatic schedule across all zones with staggered requests."""
         zone_ids = list((self.data.get("zones", {})).keys())
-        await self.client.resume_all_schedules(self.home_id, zone_ids)
-        await self.async_request_refresh()
+        if self.data and "zones" in self.data:
+            for zid in zone_ids:
+                self.data["zones"][zid]["is_overlay_active"] = False
+            self.async_set_updated_data(self.data)
+
+        for zid in zone_ids:
+            try:
+                await self.client.resume_schedule(self.home_id, zid)
+                await asyncio.sleep(0.1)
+            except Exception as err:
+                _LOGGER.debug("Erreur reprise planning zone %s: %s", zid, err)
 
     async def async_set_all_off(self) -> None:
-        """Turn off all heating zones."""
+        """Turn off all heating zones with staggered requests."""
         zone_ids = list((self.data.get("zones", {})).keys())
-        await self.client.set_all_off(self.home_id, zone_ids)
-        await self.async_request_refresh()
+        if self.data and "zones" in self.data:
+            for zid in zone_ids:
+                self.data["zones"][zid]["power"] = "OFF"
+                self.data["zones"][zid]["is_overlay_active"] = True
+            self.async_set_updated_data(self.data)
+
+        for zid in zone_ids:
+            try:
+                await self.client.set_zone_overlay(
+                    home_id=self.home_id,
+                    zone_id=zid,
+                    power="OFF",
+                    termination_type=OVERLAY_MANUAL,
+                )
+                await asyncio.sleep(0.1)
+            except Exception as err:
+                _LOGGER.debug("Erreur extinction zone %s: %s", zid, err)
 
     async def async_set_boost(self, temp: float = 25.0, duration_seconds: int = 1800) -> None:
-        """Boost all zones."""
+        """Boost all zones with staggered requests."""
         zone_ids = list((self.data.get("zones", {})).keys())
-        await self.client.set_boost(self.home_id, zone_ids, temp=temp, duration_seconds=duration_seconds)
-        await self.async_request_refresh()
+        if self.data and "zones" in self.data:
+            for zid in zone_ids:
+                self.data["zones"][zid]["target_temperature"] = temp
+                self.data["zones"][zid]["power"] = "ON"
+                self.data["zones"][zid]["is_overlay_active"] = True
+            self.async_set_updated_data(self.data)
+
+        for zid in zone_ids:
+            try:
+                await self.client.set_zone_overlay(
+                    home_id=self.home_id,
+                    zone_id=zid,
+                    target_temp=temp,
+                    power="ON",
+                    termination_type=OVERLAY_TIMER,
+                    duration_seconds=duration_seconds,
+                )
+                await asyncio.sleep(0.1)
+            except Exception as err:
+                _LOGGER.debug("Erreur boost zone %s: %s", zid, err)
 
     async def async_set_eco_all(self, eco_temp: float | None = None) -> None:
-        """Apply eco temperature across all zones."""
+        """Apply eco temperature across all zones with staggered requests."""
         temp = eco_temp or self.entry.options.get(CONF_ECO_TEMP, DEFAULT_ECO_TEMP)
         zone_ids = list((self.data.get("zones", {})).keys())
-        tasks = [
-            self.client.set_zone_overlay(
-                home_id=self.home_id,
-                zone_id=zid,
-                target_temp=temp,
-                power="ON",
-                termination_type=OVERLAY_NEXT_TIME_BLOCK,
-            )
-            for zid in zone_ids
-        ]
-        await asyncio.gather(*tasks, return_exceptions=True)
-        await self.async_request_refresh()
+        if self.data and "zones" in self.data:
+            for zid in zone_ids:
+                self.data["zones"][zid]["target_temperature"] = temp
+                self.data["zones"][zid]["power"] = "ON"
+                self.data["zones"][zid]["is_overlay_active"] = True
+            self.async_set_updated_data(self.data)
+
+        for zid in zone_ids:
+            try:
+                await self.client.set_zone_overlay(
+                    home_id=self.home_id,
+                    zone_id=zid,
+                    target_temp=temp,
+                    power="ON",
+                    termination_type=OVERLAY_NEXT_TIME_BLOCK,
+                )
+                await asyncio.sleep(0.1)
+            except Exception as err:
+                _LOGGER.debug("Erreur mode éco zone %s: %s", zid, err)
 
     async def async_set_child_lock(self, device_serial: str, child_lock: bool) -> None:
         """Toggle physical child lock on a valve."""
         await self.client.set_child_lock(device_serial, child_lock)
-        await self.async_request_refresh()
 
     async def async_set_presence(self, home: bool) -> None:
         """Set home presence lock (Home/Away)."""
