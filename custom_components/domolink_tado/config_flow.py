@@ -84,6 +84,8 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     expires_at=tokens.get("expires_at"),
                 )
                 me = await client.get_me()
+                if not me or not isinstance(me, dict):
+                    raise TadoError("Serveurs Tado temporairement indisponibles (profil non récupéré).")
                 homes = me.get("homes", [])
                 if not homes:
                     return self.async_abort(reason="no_homes_found")
@@ -145,7 +147,10 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._device_code = None  # Restart flow next time
             except (TadoAuthError, TadoError) as err:
                 _LOGGER.error("DomoLink-Tado: Error during Tado token polling/login: %s", err)
-                errors["base"] = "cannot_connect"
+                if "429" in str(err) or "Rate Limit" in str(err) or "saturé" in str(err):
+                    errors["base"] = "rate_limit"
+                else:
+                    errors["base"] = "cannot_connect"
                 # Keep active device code on network hiccup so user can retry
             except Exception as err:
                 _LOGGER.exception("DomoLink-Tado: Unexpected error during Tado login: %s", err)

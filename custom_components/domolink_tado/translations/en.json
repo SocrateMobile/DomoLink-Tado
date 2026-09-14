@@ -22,6 +22,7 @@
       "authorization_pending": "Authorization pending on Tado. Please authorize access on the Tado web page, then click Submit below.",
       "code_expired": "Device code has expired. A new code has been generated, please open the new link above.",
       "cannot_connect": "Failed to connect or authenticate with Tado. A new code has been generated, please open the link above.",
+      "rate_limit": "Tado servers are temporarily rate-limited (429 Too Many Requests). Please wait 30 to 60 seconds before clicking Submit again.",
       "unknown": "An unexpected error occurred. Please try again."
     },
     "abort": {
