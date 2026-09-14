@@ -71,12 +71,24 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         if user_input is not None:
             # User clicked submit to verify that they approved on tado.com/device
-            if not self._device_code:
+            if not self._device_code and not self._tokens:
                 return await self.async_step_user()
 
             try:
-                tokens = await TadoClient.poll_device_token(session, self._device_code)
-                _LOGGER.info("DomoLink-Tado: Device Flow token received successfully")
+                # 1. Échange du code contre les jetons OAuth2 (si pas déjà en mémoire)
+                if not self._tokens:
+                    _LOGGER.info("DomoLink-Tado: Polling Tado Device Flow token...")
+                    tokens = await TadoClient.poll_device_token(session, self._device_code)
+                    _LOGGER.info("DomoLink-Tado: Device Flow token received successfully!")
+                    self._tokens = tokens
+                else:
+                    _LOGGER.info("DomoLink-Tado: Reusing previously fetched token")
+                    tokens = self._tokens
+
+                # Petite pause préventive de 1.2s pour éviter le rate limit en rafale (burst)
+                await asyncio.sleep(1.2)
+
+                # 2. Récupération du profil et de la maison
                 client = TadoClient(
                     session=session,
                     access_token=tokens["access_token"],
@@ -110,9 +122,18 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(str(home_id))
                 self._abort_if_unique_id_configured()
 
-                self._tokens = tokens
                 self._home_id = home_id
                 self._home_name = home_name
+
+                # Tenter de précharger les zones pour l'étape de configuration des étiquettes
+                try:
+                    self._discovered_zones = await client.get_zones(home_id)
+                except Exception as err:
+                    _LOGGER.warning("Could not pre-fetch zones during setup: %s", err)
+                    self._discovered_zones = []
+
+                if self._discovered_zones:
+                    return await self.async_step_labels()
 
                 # Directly create config entry with full data and default options
                 return self.async_create_entry(
@@ -145,20 +166,22 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.warning("DomoLink-Tado: Device code expired or invalidated")
                 errors["base"] = "code_expired"
                 self._device_code = None  # Restart flow next time
+                self._tokens = None
             except (TadoAuthError, TadoError) as err:
                 _LOGGER.error("DomoLink-Tado: Error during Tado token polling/login: %s", err)
                 if "429" in str(err) or "Rate Limit" in str(err) or "saturé" in str(err):
                     errors["base"] = "rate_limit"
                 else:
                     errors["base"] = "cannot_connect"
-                # Keep active device code on network hiccup so user can retry
+                # Si le token a déjà été reçu mais que /me a été rate-limited, self._tokens reste conservé !
             except Exception as err:
                 _LOGGER.exception("DomoLink-Tado: Unexpected error during Tado login: %s", err)
                 errors["base"] = "unknown"
                 self._device_code = None
+                self._tokens = None
 
-        # If we do not have an active device code yet, request one
-        if not self._device_code:
+        # If we do not have an active device code yet and no tokens, request one
+        if not self._device_code and not self._tokens:
             try:
                 auth_resp: TadoDeviceAuthResponse = await TadoClient.request_device_code(session)
                 self._device_code = auth_resp.device_code
@@ -354,11 +377,18 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
                 return self.async_create_entry(title="", data=self.config_entry.options)
             except TadoDeviceFlowPending:
                 errors["base"] = "authorization_pending"
+            except TadoDeviceFlowExpired:
+                _LOGGER.warning("DomoLink-Tado: Re-auth device code expired")
+                errors["base"] = "code_expired"
+                self._device_code = None
             except (TadoAuthError, TadoError) as err:
                 _LOGGER.error("DomoLink-Tado: Re-auth error: %s", err)
-                errors["base"] = "cannot_connect"
+                if "429" in str(err) or "Rate Limit" in str(err) or "saturé" in str(err):
+                    errors["base"] = "rate_limit"
+                else:
+                    errors["base"] = "cannot_connect"
             except Exception as err:
-                _LOGGER.error("DomoLink-Tado: Re-auth error: %s", err)
+                _LOGGER.error("DomoLink-Tado: Re-auth unexpected error: %s", err)
                 errors["base"] = "cannot_connect"
                 self._device_code = None
 
