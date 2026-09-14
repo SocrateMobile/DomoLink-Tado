@@ -232,16 +232,20 @@ class TadoClient:
             "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         }
 
-        for attempt in range(3):
+        for attempt in range(4):
             try:
                 async with self.session.request(
                     method, url, json=json_data, params=params, headers=headers
                 ) as resp:
                     if resp.status == 429:
                         retry_after = resp.headers.get("Retry-After")
-                        wait_sec = float(retry_after) if retry_after and retry_after.isdigit() else (2.0 * (attempt + 1))
+                        try:
+                            wait_sec = float(retry_after) if retry_after else (3.0 * (attempt + 1))
+                        except (ValueError, TypeError):
+                            wait_sec = 3.0 * (attempt + 1)
+                        wait_sec = min(wait_sec, 30.0)
                         _LOGGER.warning(
-                            "Tado API Rate Limit (429 Too Many Requests) sur %s. Attente de %.1fs (tentative %d/3)...",
+                            "Tado API Rate Limit (429 Too Many Requests) sur %s. Attente de %.1fs (tentative %d/4)...",
                             endpoint,
                             wait_sec,
                             attempt + 1,
@@ -257,18 +261,21 @@ class TadoClient:
                         )
 
                     if resp.status == 204:
-                        return None
+                        return {}
 
                     if resp.status not in (200, 201):
                         text = await resp.text()
                         raise TadoError(f"API request to {endpoint} failed ({resp.status}): {text}")
 
-                    return await resp.json()
+                    data = await resp.json()
+                    return data if data is not None else {}
             except aiohttp.ClientError as err:
-                if attempt < 2:
-                    await asyncio.sleep(1.5 * (attempt + 1))
+                if attempt < 3:
+                    await asyncio.sleep(2.0 * (attempt + 1))
                     continue
                 raise TadoError(f"Network error requesting {endpoint}: {err}") from err
+
+        raise TadoError(f"API request to {endpoint} failed: Serveurs Tado temporairement saturés (Rate Limit 429). Veuillez patienter.")
 
     # ── High-level API endpoints ──────────────────────────────
 

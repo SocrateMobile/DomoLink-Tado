@@ -22,6 +22,7 @@
       "authorization_pending": "Validation en attente sur Tado. Veuillez valider la connexion sur la page Tado, puis cliquer sur le bouton bleu Valider ci-dessous.",
       "code_expired": "Le code de connexion a expiré. Un nouveau code a été préparé, veuillez cliquer sur le nouveau lien ci-dessus.",
       "cannot_connect": "Échec de connexion ou d'authentification auprès de Tado. Un nouveau code a été préparé, veuillez cliquer sur le lien ci-dessus.",
+      "rate_limit": "Les serveurs Tado sont temporairement saturés (Rate Limit 429). Veuillez patienter 30 à 60 secondes avant de re-cliquer sur Valider.",
       "unknown": "Une erreur inattendue est survenue. Veuillez réessayer."
     },
     "abort": {
