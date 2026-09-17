@@ -99,13 +99,34 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 me = await client.get_me()
                 if not me or not isinstance(me, dict):
                     raise TadoError("Serveurs Tado temporairement indisponibles (profil non récupéré).")
-                homes = me.get("homes", [])
-                if not homes:
-                    return self.async_abort(reason="no_homes_found")
+                # Extraction multi-formats du domicile (compatible toutes variantes de l'API Tado)
+                home_id: int | None = None
+                home_name: str = "Tado Home"
 
-                primary_home = homes[0]
-                home_id = primary_home["id"]
-                home_name = primary_home.get("name", "Tado Home")
+                homes = me.get("homes")
+                if isinstance(homes, list) and len(homes) > 0:
+                    primary_home = homes[0]
+                    if isinstance(primary_home, dict):
+                        home_id = primary_home.get("id") or primary_home.get("homeId")
+                        home_name = primary_home.get("name") or "Tado Home"
+                    elif isinstance(primary_home, (int, str)):
+                        try:
+                            home_id = int(primary_home)
+                        except (ValueError, TypeError):
+                            pass
+
+                if home_id is None:
+                    raw_home_id = me.get("homeId") or me.get("id")
+                    if raw_home_id is not None:
+                        try:
+                            home_id = int(raw_home_id)
+                        except (ValueError, TypeError):
+                            pass
+                    if isinstance(me.get("name"), str) and me.get("name"):
+                        home_name = me["name"]
+
+                if not home_id:
+                    return self.async_abort(reason="no_homes_found")
 
                 if self._reauth_entry:
                     self.hass.config_entries.async_update_entry(
@@ -126,17 +147,7 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._home_id = home_id
                 self._home_name = home_name
 
-                # Tenter de précharger les zones pour l'étape de configuration des étiquettes
-                try:
-                    self._discovered_zones = await client.get_zones(home_id)
-                except Exception as err:
-                    _LOGGER.warning("Could not pre-fetch zones during setup: %s", err)
-                    self._discovered_zones = []
-
-                if self._discovered_zones:
-                    return await self.async_step_labels()
-
-                # Directly create config entry with full data and default options
+                # Création directe de l'entrée avec options par défaut (expérience standard HA)
                 return self.async_create_entry(
                     title=f"DomoLink Tado ({home_name})",
                     data={
@@ -178,8 +189,8 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             except Exception as err:
                 _LOGGER.exception("DomoLink-Tado: Unexpected error during Tado login: %s", err)
                 errors["base"] = "unknown"
-                self._device_code = None
-                self._tokens = None
+                if not self._tokens:
+                    self._device_code = None
 
         # If we do not have an active device code yet and no tokens, request one
         if not self._device_code and not self._tokens:
@@ -241,11 +252,12 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         schema_dict: dict[Any, Any] = {}
         for z in self._discovered_zones:
-            name = z.get("name", f"Pièce {z.get('id')}")
-            # Voluptuous optional string with room name
-            schema_dict[vol.Optional(f"zone_{z['id']}", description={"suggested_value": ""})] = str
+            zid = str(z.get("id", ""))
+            if not zid:
+                continue
+            schema_dict[vol.Optional(f"zone_{zid}", default="")] = str
 
-        room_names = ", ".join(z.get("name", "") for z in self._discovered_zones)
+        room_names = ", ".join(str(z.get("name") or f"Pièce {z.get('id', '')}") for z in self._discovered_zones)
         return self.async_show_form(
             step_id="labels",
             data_schema=vol.Schema(schema_dict),

@@ -221,5 +221,37 @@ class TestCoordinatorFixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.coordinator.data["zones"][2]["target_temperature"], 25.0)
 
 
+class TestConfigFlowAndTokenParsing(unittest.IsolatedAsyncioTestCase):
+    """Test robust token polling and config flow entry creation."""
+
+    async def test_poll_device_token_null_expires_in(self):
+        """Test poll_device_token does not crash when expires_in is None."""
+        session = MagicMock()
+        resp = AsyncMock()
+        resp.status = 200
+        resp.json = AsyncMock(return_value={
+            "access_token": "secret_token",
+            "refresh_token": "refresh_secret",
+            "expires_in": None,
+        })
+        session.post = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=resp)))
+
+        res = await TadoClient.poll_device_token(session, "test_code")
+        self.assertEqual(res["access_token"], "secret_token")
+        self.assertIsNotNone(res["expires_at"])
+
+    async def test_poll_device_token_missing_access_token(self):
+        """Test poll_device_token raises TadoAuthError if access_token is missing."""
+        from custom_components.domolink_tado.tado_api import TadoAuthError
+        session = MagicMock()
+        resp = AsyncMock()
+        resp.status = 200
+        resp.json = AsyncMock(return_value={"refresh_token": "r"})
+        session.post = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=resp)))
+
+        with self.assertRaises(TadoAuthError):
+            await TadoClient.poll_device_token(session, "test_code")
+
+
 if __name__ == "__main__":
     unittest.main()
