@@ -1,4 +1,4 @@
-"""Climate platform for DomoLink-Tado."""
+"""Climate platform for DomoLink-Tado supporting Heating and Air Conditioning."""
 from __future__ import annotations
 
 import logging
@@ -44,26 +44,20 @@ async def async_setup_entry(
     zones = coordinator.data.get("zones", {})
 
     for zone_id, zone_data in zones.items():
-        if zone_data.get("type") == "HEATING":
+        if zone_data.get("type") in ("HEATING", "AIR_CONDITIONING"):
             entities.append(DomolinkTadoClimate(coordinator, entry, zone_id))
 
     async_add_entities(entities)
 
 
 class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEntity):
-    """Representation of a DomoLink-Tado climate zone/thermostat."""
+    """Representation of a DomoLink-Tado climate zone/thermostat (Heating or Smart AC)."""
 
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_precision = PRECISION_HALVES
     _attr_target_temperature_step = TEMP_STEP
     _attr_min_temp = MIN_TEMP
     _attr_max_temp = MAX_TEMP
-    _attr_hvac_modes = [HVACMode.AUTO, HVACMode.HEAT, HVACMode.OFF]
-    _attr_supported_features = (
-        ClimateEntityFeature.TARGET_TEMPERATURE
-        | ClimateEntityFeature.TURN_ON
-        | ClimateEntityFeature.TURN_OFF
-    )
 
     def __init__(
         self,
@@ -83,11 +77,77 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
         return self.coordinator.data.get("zones", {}).get(self.zone_id, {})
 
     @property
+    def is_ac(self) -> bool:
+        """Return True if this zone is an Air Conditioning zone."""
+        return self._zone_data.get("type") == "AIR_CONDITIONING"
+
+    @property
+    def supported_features(self) -> ClimateEntityFeature:
+        """Return supported features according to zone type."""
+        base_features = (
+            ClimateEntityFeature.TARGET_TEMPERATURE
+            | ClimateEntityFeature.TURN_ON
+            | ClimateEntityFeature.TURN_OFF
+        )
+        if self.is_ac:
+            return (
+                base_features
+                | ClimateEntityFeature.FAN_MODE
+                | ClimateEntityFeature.SWING_MODE
+            )
+        return base_features
+
+    @property
+    def hvac_modes(self) -> list[HVACMode]:
+        """Return available HVAC modes."""
+        if self.is_ac:
+            return [
+                HVACMode.AUTO,
+                HVACMode.COOL,
+                HVACMode.HEAT,
+                HVACMode.DRY,
+                HVACMode.FAN_ONLY,
+                HVACMode.OFF,
+            ]
+        return [HVACMode.AUTO, HVACMode.HEAT, HVACMode.OFF]
+
+    @property
+    def fan_modes(self) -> list[str] | None:
+        """Return available fan modes for AC."""
+        if not self.is_ac:
+            return None
+        return ["auto", "quiet", "low", "middle", "high"]
+
+    @property
+    def fan_mode(self) -> str | None:
+        """Return current fan mode for AC."""
+        if not self.is_ac:
+            return None
+        speed = self._zone_data.get("fan_speed") or "AUTO"
+        return speed.lower()
+
+    @property
+    def swing_modes(self) -> list[str] | None:
+        """Return available swing modes for AC."""
+        if not self.is_ac:
+            return None
+        return ["off", "on"]
+
+    @property
+    def swing_mode(self) -> str | None:
+        """Return current swing mode for AC."""
+        if not self.is_ac:
+            return None
+        sw = self._zone_data.get("swing") or "OFF"
+        return sw.lower()
+
+    @property
     def device_info(self) -> DeviceInfo:
         """Return device information for Home Assistant registry."""
         devices = self._zone_data.get("devices", [])
         primary_serial = devices[0].get("serialNo") if devices else f"zone_{self.zone_id}"
-        model = devices[0].get("deviceType", "Smart Radiator Valve") if devices else "Tado Zone"
+        default_model = "Smart AC Control" if self.is_ac else "Smart Radiator Valve"
+        model = devices[0].get("deviceType", default_model) if devices else default_model
 
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_{self.zone_id}")},
@@ -121,25 +181,53 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
 
         if power == "OFF":
             return HVACMode.OFF
-        if is_overlay:
+
+        if not self.is_ac:
+            if is_overlay:
+                return HVACMode.HEAT
+            return HVACMode.AUTO
+
+        if not is_overlay:
+            return HVACMode.AUTO
+
+        mode = (self._zone_data.get("ac_mode") or "COOL").upper()
+        if mode == "HEAT":
             return HVACMode.HEAT
-        return HVACMode.AUTO
+        if mode == "DRY":
+            return HVACMode.DRY
+        if mode == "FAN":
+            return HVACMode.FAN_ONLY
+        return HVACMode.COOL
 
     @property
     def hvac_action(self) -> HVACAction:
-        """Return current running action (heating or idle)."""
+        """Return current running action."""
         power = self._zone_data.get("power", "OFF")
-        heating_power = self._zone_data.get("heating_power", 0.0)
-
         if power == "OFF":
             return HVACAction.OFF
-        if heating_power > 0:
+
+        if not self.is_ac:
+            heating_power = self._zone_data.get("heating_power", 0.0)
+            if heating_power > 0:
+                return HVACAction.HEATING
+            return HVACAction.IDLE
+
+        mode = (self._zone_data.get("ac_mode") or "COOL").upper()
+        if mode == "HEAT":
             return HVACAction.HEATING
+        if mode == "COOL":
+            return HVACAction.COOLING
+        if mode == "DRY":
+            return HVACAction.DRYING
+        if mode == "FAN":
+            return HVACAction.FAN
         return HVACAction.IDLE
 
     @property
     def icon(self) -> str:
-        """Return icon according to physical device type."""
+        """Return icon according to physical device type and zone type."""
+        if self.is_ac:
+            return "mdi:air-conditioner"
         devs = self._zone_data.get("devices", [])
         if devs:
             dtype = str(devs[0].get("deviceType") or devs[0].get("type") or "").upper()
@@ -157,8 +245,9 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
         z = self._zone_data
         devs = z.get("devices", [])
         primary_type = (devs[0].get("deviceType") or devs[0].get("type") or "VA01") if devs else "VA01"
-        return {
+        attrs: dict[str, Any] = {
             "zone_id": self.zone_id,
+            "zone_type": z.get("type", "HEATING"),
             "heating_power_percentage": z.get("heating_power", 0.0),
             "is_overlay_active": z.get("is_overlay_active", False),
             "open_window_detected": z.get("open_window", False),
@@ -180,6 +269,17 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
                 for d in devs
             ],
         }
+        if self.is_ac:
+            attrs["ac_mode"] = z.get("ac_mode")
+            attrs["fan_speed"] = z.get("fan_speed")
+            attrs["swing"] = z.get("swing")
+        if z.get("is_external_temp"):
+            attrs["external_temperature_used"] = True
+            attrs["raw_tado_temperature"] = z.get("raw_inside_temperature")
+        if z.get("is_external_humidity"):
+            attrs["external_humidity_used"] = True
+            attrs["raw_tado_humidity"] = z.get("raw_humidity")
+        return attrs
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""
@@ -190,22 +290,102 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
         overlay_mode = self.entry.options.get(CONF_OVERLAY_MODE, DEFAULT_OVERLAY_MODE)
         duration = self.entry.options.get(CONF_OVERLAY_DURATION, DEFAULT_OVERLAY_DURATION)
 
-        await self.coordinator.async_set_temperature(
-            zone_id=self.zone_id,
-            target_temp=temp,
-            termination_type=overlay_mode,
-            duration_seconds=duration,
-        )
+        if self.is_ac:
+            curr_mode = self._zone_data.get("ac_mode") or "COOL"
+            await self.coordinator.async_set_ac_mode(
+                zone_id=self.zone_id,
+                mode=curr_mode,
+                target_temp=temp,
+                fan_speed=self.fan_mode.upper() if self.fan_mode else "AUTO",
+                swing=self.swing_mode.upper() if self.swing_mode else "OFF",
+                termination_type=overlay_mode,
+                duration_seconds=duration,
+            )
+        else:
+            await self.coordinator.async_set_temperature(
+                zone_id=self.zone_id,
+                target_temp=temp,
+                termination_type=overlay_mode,
+                duration_seconds=duration,
+            )
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set new target HVAC mode."""
         if hvac_mode == HVACMode.AUTO:
             await self.coordinator.async_resume_schedule(self.zone_id)
-        elif hvac_mode == HVACMode.OFF:
+            return
+
+        if hvac_mode == HVACMode.OFF:
             await self.coordinator.async_set_zone_off(self.zone_id)
-        elif hvac_mode == HVACMode.HEAT:
-            target = self.target_temperature or 20.0
-            await self.async_set_temperature(temperature=target)
+            return
+
+        if not self.is_ac:
+            if hvac_mode == HVACMode.HEAT:
+                target = self.target_temperature or 20.0
+                await self.async_set_temperature(temperature=target)
+            return
+
+        # AC Zone Mode handling
+        tado_mode_map = {
+            HVACMode.COOL: "COOL",
+            HVACMode.HEAT: "HEAT",
+            HVACMode.DRY: "DRY",
+            HVACMode.FAN_ONLY: "FAN",
+        }
+        tado_mode = tado_mode_map.get(hvac_mode, "COOL")
+        target = self.target_temperature or (22.0 if tado_mode != "HEAT" else 20.0)
+        overlay_mode = self.entry.options.get(CONF_OVERLAY_MODE, DEFAULT_OVERLAY_MODE)
+        duration = self.entry.options.get(CONF_OVERLAY_DURATION, DEFAULT_OVERLAY_DURATION)
+
+        await self.coordinator.async_set_ac_mode(
+            zone_id=self.zone_id,
+            mode=tado_mode,
+            target_temp=target if tado_mode != "FAN" else None,
+            fan_speed=self.fan_mode.upper() if self.fan_mode else "AUTO",
+            swing=self.swing_mode.upper() if self.swing_mode else "OFF",
+            termination_type=overlay_mode,
+            duration_seconds=duration,
+        )
+
+    async def async_set_fan_mode(self, fan_mode: str) -> None:
+        """Set new target fan mode for AC."""
+        if not self.is_ac:
+            return
+
+        overlay_mode = self.entry.options.get(CONF_OVERLAY_MODE, DEFAULT_OVERLAY_MODE)
+        duration = self.entry.options.get(CONF_OVERLAY_DURATION, DEFAULT_OVERLAY_DURATION)
+        curr_mode = self._zone_data.get("ac_mode") or "COOL"
+        target = self.target_temperature or 22.0
+
+        await self.coordinator.async_set_ac_mode(
+            zone_id=self.zone_id,
+            mode=curr_mode,
+            target_temp=target,
+            fan_speed=fan_mode.upper(),
+            swing=self.swing_mode.upper() if self.swing_mode else "OFF",
+            termination_type=overlay_mode,
+            duration_seconds=duration,
+        )
+
+    async def async_set_swing_mode(self, swing_mode: str) -> None:
+        """Set new target swing mode for AC."""
+        if not self.is_ac:
+            return
+
+        overlay_mode = self.entry.options.get(CONF_OVERLAY_MODE, DEFAULT_OVERLAY_MODE)
+        duration = self.entry.options.get(CONF_OVERLAY_DURATION, DEFAULT_OVERLAY_DURATION)
+        curr_mode = self._zone_data.get("ac_mode") or "COOL"
+        target = self.target_temperature or 22.0
+
+        await self.coordinator.async_set_ac_mode(
+            zone_id=self.zone_id,
+            mode=curr_mode,
+            target_temp=target,
+            fan_speed=self.fan_mode.upper() if self.fan_mode else "AUTO",
+            swing=swing_mode.upper(),
+            termination_type=overlay_mode,
+            duration_seconds=duration,
+        )
 
     async def async_turn_on(self) -> None:
         """Turn on the climate entity."""

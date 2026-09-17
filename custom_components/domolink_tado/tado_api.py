@@ -26,6 +26,10 @@ _LOGGER = logging.getLogger(__name__)
 DEFAULT_USER_AGENT = "PyTado/0.18.16"
 DEFAULT_REFERER = "https://app.tado.com/"
 
+_QUOTA_REGEX = re.compile(r"q=(\d+)")
+_REMAINING_REGEX = re.compile(r"r=(\d+)")
+_RESET_REGEX = re.compile(r"t=(\d+)")
+
 
 class TadoError(Exception):
     """Base exception for Tado client."""
@@ -72,6 +76,10 @@ class TadoClient:
         self.expires_at = expires_at if expires_at is not None else (time.time() + 3600 if access_token else 0.0)
         self.token_update_callback = token_update_callback
         self._refresh_lock = asyncio.Lock()
+        self.rate_limit_limit: int | None = None
+        self.rate_limit_remaining: int | None = None
+        self.rate_limit_reset_seconds: int | None = None
+        self.rate_limit_last_update: float | None = None
 
     @staticmethod
     async def request_device_code(session: aiohttp.ClientSession) -> TadoDeviceAuthResponse:
@@ -227,6 +235,79 @@ class TadoClient:
             wait_sec = default_base * (2 ** attempt)
         return min(wait_sec, max_delay)
 
+    def _parse_ratelimit_headers(self, headers: Any) -> None:
+        """Parse RFC RateLimit and RateLimit-Policy headers returned by Tado."""
+        if not headers:
+            return
+
+        policy = headers.get("RateLimit-Policy") or headers.get("ratelimit-policy") or ""
+        rl = headers.get("RateLimit") or headers.get("ratelimit") or ""
+        reset_hdr = headers.get("RateLimit-Reset") or headers.get("ratelimit-reset") or ""
+
+        limit_match = _QUOTA_REGEX.search(policy)
+        if limit_match:
+            try:
+                self.rate_limit_limit = int(limit_match.group(1))
+            except (ValueError, TypeError):
+                pass
+
+        rem_match = _REMAINING_REGEX.search(rl)
+        if rem_match:
+            try:
+                self.rate_limit_remaining = int(rem_match.group(1))
+            except (ValueError, TypeError):
+                pass
+
+        reset_match = _RESET_REGEX.search(rl)
+        if reset_match:
+            try:
+                self.rate_limit_reset_seconds = int(reset_match.group(1))
+            except (ValueError, TypeError):
+                pass
+        elif reset_hdr:
+            try:
+                self.rate_limit_reset_seconds = int(reset_hdr)
+            except (ValueError, TypeError):
+                pass
+
+        # Fallback pour passerelles utilisant les en-têtes X-RateLimit-*
+        if self.rate_limit_limit is None:
+            x_limit = headers.get("X-RateLimit-Limit") or headers.get("x-ratelimit-limit")
+            if x_limit:
+                try:
+                    self.rate_limit_limit = int(x_limit)
+                except (ValueError, TypeError):
+                    pass
+
+        if self.rate_limit_remaining is None:
+            x_rem = headers.get("X-RateLimit-Remaining") or headers.get("x-ratelimit-remaining")
+            if x_rem:
+                try:
+                    self.rate_limit_remaining = int(x_rem)
+                except (ValueError, TypeError):
+                    pass
+
+        if self.rate_limit_reset_seconds is None:
+            x_reset = headers.get("X-RateLimit-Reset") or headers.get("x-ratelimit-reset")
+            if x_reset:
+                try:
+                    self.rate_limit_reset_seconds = int(x_reset)
+                except (ValueError, TypeError):
+                    pass
+
+        if self.rate_limit_remaining is not None or self.rate_limit_limit is not None:
+            self.rate_limit_last_update = time.time()
+
+    @property
+    def rate_limit_info(self) -> dict[str, Any]:
+        """Return structured rate limit telemetry."""
+        return {
+            "limit": self.rate_limit_limit,
+            "remaining": self.rate_limit_remaining,
+            "reset_seconds": self.rate_limit_reset_seconds,
+            "last_update": self.rate_limit_last_update,
+        }
+
     async def async_refresh_token(self) -> str:
         """Refresh the access token using the stored refresh token."""
         if not self.refresh_token:
@@ -313,6 +394,7 @@ class TadoClient:
                 async with self.session.request(
                     method, url, json=json_data, params=params, headers=headers
                 ) as resp:
+                    self._parse_ratelimit_headers(resp.headers)
                     if resp.status == 429:
                         policy = resp.headers.get("RateLimit-Policy", "")
                         rl = resp.headers.get("RateLimit", "")
@@ -398,14 +480,26 @@ class TadoClient:
         power: str = "ON",
         termination_type: str = OVERLAY_NEXT_TIME_BLOCK,
         duration_seconds: int | None = None,
+        zone_type: str = "HEATING",
+        mode: str | None = None,
+        fan_speed: str | None = None,
+        swing: str | None = None,
     ) -> dict[str, Any]:
-        """Set a manual overlay (temperature / power) for a zone."""
+        """Set a manual overlay (temperature / power / AC mode) for a zone."""
         setting: dict[str, Any] = {
-            "type": "HEATING",
+            "type": zone_type.upper(),
             "power": power.upper(),
         }
-        if power.upper() == "ON" and target_temp is not None:
-            setting["temperature"] = {"celsius": round(float(target_temp), 1)}
+        if power.upper() == "ON":
+            if target_temp is not None:
+                setting["temperature"] = {"celsius": round(float(target_temp), 1)}
+            if zone_type.upper() == "AIR_CONDITIONING":
+                if mode:
+                    setting["mode"] = mode.upper()
+                if fan_speed:
+                    setting["fanSpeed"] = fan_speed.upper()
+                if swing:
+                    setting["swing"] = swing.upper()
 
         termination: dict[str, Any] = {}
         if termination_type == OVERLAY_MANUAL:

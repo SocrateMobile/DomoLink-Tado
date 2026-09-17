@@ -16,7 +16,11 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import (
+    CONF_SHOW_QUOTA_SENSORS,
+    DEFAULT_SHOW_QUOTA_SENSORS,
+    DOMAIN,
+)
 from .coordinator import DomolinkTadoCoordinator
 
 
@@ -35,6 +39,11 @@ async def async_setup_entry(
     entities.append(DomolinkTadoOutdoorHumiditySensor(coordinator))
     entities.append(DomolinkTadoActiveHeatingZonesSensor(coordinator))
     entities.append(DomolinkTadoTotalHeatingPowerSensor(coordinator))
+
+    # Capteurs de Quota API Tado (RFC RateLimit)
+    if entry.options.get(CONF_SHOW_QUOTA_SENSORS, DEFAULT_SHOW_QUOTA_SENSORS):
+        entities.append(DomolinkTadoQuotaRemainingSensor(coordinator))
+        entities.append(DomolinkTadoQuotaLimitSensor(coordinator))
 
     # 2. Zone Sensors
     zones = coordinator.data.get("zones", {})
@@ -167,6 +176,67 @@ class DomolinkTadoTotalHeatingPowerSensor(CoordinatorEntity[DomolinkTadoCoordina
         return round(total / len(zones), 1)
 
 
+class DomolinkTadoQuotaRemainingSensor(CoordinatorEntity[DomolinkTadoCoordinator], SensorEntity):
+    """Sensor tracking remaining Tado API request quota (RFC RateLimit)."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "req"
+    _attr_icon = "mdi:speedometer"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_quota_remaining"
+        self._attr_name = "Tado Quota API Restant"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
+            name=f"Tado {self.coordinator.home_name}",
+            manufacturer="Tado (DomoLink)",
+            model="Home Hub",
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        return self.coordinator.data.get("rate_limit", {}).get("remaining")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        rl = self.coordinator.data.get("rate_limit", {})
+        return {
+            "quota_limit": rl.get("limit"),
+            "reset_seconds": rl.get("reset_seconds"),
+            "last_update": rl.get("last_update"),
+        }
+
+
+class DomolinkTadoQuotaLimitSensor(CoordinatorEntity[DomolinkTadoCoordinator], SensorEntity):
+    """Sensor tracking maximum daily Tado API request limit (RFC RateLimit-Policy)."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "req"
+    _attr_icon = "mdi:shield-check"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_quota_limit"
+        self._attr_name = "Tado Quota API Plafond"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
+            name=f"Tado {self.coordinator.home_name}",
+            manufacturer="Tado (DomoLink)",
+            model="Home Hub",
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        return self.coordinator.data.get("rate_limit", {}).get("limit")
+
+
 # ── Zone Sensors ────────────────────────────────────────────
 
 class DomolinkTadoZoneSensorBase(CoordinatorEntity[DomolinkTadoCoordinator], SensorEntity):
@@ -206,6 +276,16 @@ class DomolinkTadoZoneTempSensor(DomolinkTadoZoneSensorBase):
     def native_value(self) -> float | None:
         return self._zone_data.get("inside_temperature")
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs: dict[str, Any] = {}
+        if self._zone_data.get("is_external_temp"):
+            attrs["source"] = "external_sensor"
+            attrs["raw_tado_temperature"] = self._zone_data.get("raw_inside_temperature")
+        else:
+            attrs["source"] = "tado_sensor"
+        return attrs
+
 
 class DomolinkTadoZoneTargetTempSensor(DomolinkTadoZoneSensorBase):
     """Sensor for zone target temperature."""
@@ -239,6 +319,16 @@ class DomolinkTadoZoneHumiditySensor(DomolinkTadoZoneSensorBase):
     @property
     def native_value(self) -> float | None:
         return self._zone_data.get("humidity")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs: dict[str, Any] = {}
+        if self._zone_data.get("is_external_humidity"):
+            attrs["source"] = "external_sensor"
+            attrs["raw_tado_humidity"] = self._zone_data.get("raw_humidity")
+        else:
+            attrs["source"] = "tado_sensor"
+        return attrs
 
 
 class DomolinkTadoZoneHeatingPowerSensor(DomolinkTadoZoneSensorBase):

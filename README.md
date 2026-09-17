@@ -11,7 +11,19 @@ Intégration Home Assistant sur-mesure et pérenne pour vos équipements de chau
   - *Tout éteindre* (mise hors-gel immédiate).
   - *Boost Intelligent partout* et *Boost Intelligent par pièce* (durée et température configurables).
 - **Interrupteur Mode Éco Global** : 1 switch pour basculer toute la maison à température économique ou reprendre automatiquement les plannings.
-- **Eau Chaude Sanitaire (ECS)** : Détection et pilotage complet des zones de chauffe-eau (`water_heater`) avec consignes de température et modes Auto, Heat, Off.
+- **Capteurs externes de température & humidité par pièce (Option A)** :
+  - Remplacez la mesure des vannes thermostatiques (souvent faussée près du radiateur) par vos sondes Zigbee/Z-Wave/Bluetooth Home Assistant.
+  - Calculs physiques (point de rosée, humidité absolue, risque de moisissure) basés sur vos vraies mesures d'ambiance.
+- **Auto-calibrage physique des têtes thermostatiques** :
+  - Ajustement automatique de l'offset physique des vannes thermostatiques Tado pour synchroniser le matériel sur vos thermomètres de pièce.
+  - Moteur anti-battement intelligent (seuil deadband 0.5°C, cooldown 30 min) : zéro gaspillage de piles et respect absolu des quotas API.
+- **Surveillance en temps réel des quotas API Tado (Option B)** :
+  - Sniffing automatique des en-têtes HTTP RFC 9110 (`RateLimit`, `RateLimit-Policy`, `RateLimit-Reset`) sur chaque réponse.
+  - Capteurs dédiés `sensor.tado_api_quota_restant` et `sensor.tado_api_quota_plafond` avec compte à rebours de réinitialisation.
+- **Contrôle Climatisation & Pompes à chaleur (Option C)** :
+  - Détection automatique et gestion native des zones `AIR_CONDITIONING` (Smart AC Control).
+  - Support complet des modes CVC : Froid (`cool`), Chaud (`heat`), Déshumidification (`dry`), Ventilation seule (`fan_only`), Auto (`auto`) et Éteint (`off`).
+  - Sélection des vitesses de ventilation (`auto`, `quiet`, `low`, `middle`, `high`) et commande des volets oscillants (`swing`).
 - **Calculs physiques locaux 100% hors-ligne (zéro coût API)** :
   - Point de rosée (°C) et Humidité absolue (g/m³).
   - Indice de risque de moisissure (sûr, modéré, élevé, critique).

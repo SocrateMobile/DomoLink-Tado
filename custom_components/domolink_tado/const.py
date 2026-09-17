@@ -5,7 +5,7 @@ from homeassistant.const import Platform
 
 DOMAIN = "domolink_tado"
 NAME = "DomoLink-Tado"
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 
 # Endpoints API Tado
 TADO_AUTH_BASE = "https://login.tado.com/oauth2"
@@ -39,6 +39,10 @@ CONF_AUTO_GEOFENCING_ENABLED = "auto_geofencing_enabled"
 CONF_GEOFENCING_PERSONS = "geofencing_persons"
 CONF_SMART_BOOST_TEMP = "smart_boost_temp"
 CONF_SMART_BOOST_DURATION = "smart_boost_duration"
+CONF_ZONE_TEMP_ENTITIES = "zone_temp_entities"
+CONF_ZONE_HUMIDITY_ENTITIES = "zone_humidity_entities"
+CONF_AUTO_OFFSET_CALIBRATION = "auto_offset_calibration"
+CONF_SHOW_QUOTA_SENSORS = "show_quota_sensors"
 
 # Modes de préchauffage
 PREHEAT_MODE_ADVISORY = "ADVISORY"
@@ -64,6 +68,19 @@ DEFAULT_AUTO_GEOFENCING_ENABLED = False
 DEFAULT_GEOFENCING_PERSONS = ""
 DEFAULT_SMART_BOOST_TEMP = 22.0
 DEFAULT_SMART_BOOST_DURATION = 1800  # 30 minutes
+DEFAULT_AUTO_OFFSET_CALIBRATION = False
+DEFAULT_SHOW_QUOTA_SENSORS = True
+OFFSET_MIN_STEP = 0.5  # Écart minimal en °C pour déclencher une mise à jour d'offset
+OFFSET_UPDATE_COOLDOWN = 1800  # 30 minutes minimum entre deux mises à jour d'offset par appareil
+
+# Vitesses et volets Climatisation (Smart AC)
+FAN_SPEED_AUTO = "AUTO"
+FAN_SPEED_QUIET = "QUIET"
+FAN_SPEED_LOW = "LOW"
+FAN_SPEED_MIDDLE = "MIDDLE"
+FAN_SPEED_HIGH = "HIGH"
+SWING_ON = "ON"
+SWING_OFF = "OFF"
 
 # Températures limites
 MIN_TEMP = 5.0
