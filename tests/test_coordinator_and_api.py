@@ -95,9 +95,6 @@ if "homeassistant" not in sys.modules:
         TARGET_TEMPERATURE = 2
     ha_wh.WaterHeaterEntity = WaterHeaterEntity
     ha_wh.WaterHeaterEntityFeature = WaterHeaterEntityFeature
-    ha_wh.STATE_AUTO = "auto"
-    ha_wh.STATE_HEAT = "heat"
-    ha_wh.STATE_OFF = "off"
 
     ha_sensor = make_pkg("homeassistant.components.sensor")
     class SensorEntity: pass
