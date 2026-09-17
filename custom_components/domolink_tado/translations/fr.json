@@ -60,7 +60,11 @@
           "preheat_max_duration": "Durée maximale d'anticipation de préchauffe (minutes)",
           "eco_temperature": "Température du mode Éco global (°C)",
           "adaptive_polling": "Polling adaptatif intelligent (60s en chauffe, 5min au repos)",
-          "outdoor_weather_entity": "Entité météo extérieure pour l'aération (ex: weather.home)"
+          "outdoor_weather_entity": "Entité météo extérieure pour l'aération (ex: weather.home)",
+          "auto_geofencing_enabled": "Géolocalisation automatisée (Contournement Auto-Assist payant)",
+          "geofencing_persons": "Entités personnes/trackers à surveiller (ex: person.jean, person.marie ou vide pour zone.home)",
+          "smart_boost_temp": "Température du Boost Intelligent (°C)",
+          "smart_boost_duration": "Durée du Boost Intelligent (secondes)"
         }
       },
       "reauth_device": {

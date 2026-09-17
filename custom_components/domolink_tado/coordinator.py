@@ -16,10 +16,12 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import (
     CONF_ADAPTIVE_POLLING,
+    CONF_AUTO_GEOFENCING_ENABLED,
     CONF_AUTO_WINDOW_DURATION,
     CONF_AUTO_WINDOW_ENABLED,
     CONF_DYNAMIC_WINDOW_DROP,
     CONF_ECO_TEMP,
+    CONF_GEOFENCING_PERSONS,
     CONF_HOME_ID,
     CONF_HOME_NAME,
     CONF_OUTDOOR_WEATHER_ENTITY,
@@ -29,15 +31,21 @@ from .const import (
     CONF_PREHEAT_MAX_DURATION,
     CONF_PREHEAT_MODE,
     CONF_ROOM_LABELS,
+    CONF_SMART_BOOST_DURATION,
+    CONF_SMART_BOOST_TEMP,
+    DEFAULT_AUTO_GEOFENCING_ENABLED,
     DEFAULT_AUTO_WINDOW_DURATION,
     DEFAULT_AUTO_WINDOW_ENABLED,
     DEFAULT_DYNAMIC_WINDOW_DROP,
     DEFAULT_ECO_TEMP,
+    DEFAULT_GEOFENCING_PERSONS,
     DEFAULT_HEATING_RATE,
     DEFAULT_OVERLAY_MODE,
     DEFAULT_PREHEAT_ENABLED,
     DEFAULT_PREHEAT_MAX_DURATION,
     DEFAULT_PREHEAT_MODE,
+    DEFAULT_SMART_BOOST_DURATION,
+    DEFAULT_SMART_BOOST_TEMP,
     DOMAIN,
     OVERLAY_MANUAL,
     OVERLAY_NEXT_TIME_BLOCK,
@@ -444,6 +452,9 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 else "CLEAR"
             )
 
+            presence_val = home_state.get("presence", "HOME")
+            self._check_automated_geofencing(presence_val)
+
             return {
                 "home_id": self.home_id,
                 "home_name": self.home_name,
@@ -458,7 +469,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "solar_intensity": weather.get("solarIntensity", {}).get("percentage", 0),
                 },
                 "home_state": home_state,
-                "presence": home_state.get("presence", "HOME"),
+                "presence": presence_val,
                 "active_heating_zones": active_heating_count,
                 "total_heating_power": total_heating_power,
                 "last_update": datetime.now().isoformat(),
@@ -750,9 +761,161 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         await self.client.set_child_lock(device_serial, child_lock)
 
     async def async_set_presence(self, home: bool) -> None:
-        """Set home presence lock (Home/Away)."""
+        """Set home presence lock (Home/Away) with local redundancy check."""
+        target_state = "HOME" if home else "AWAY"
+        current_state = self.data.get("presence") if self.data else None
+        if current_state == target_state:
+            _LOGGER.debug(
+                "DomoLink-Tado: Présence déjà sur %s. Appel API ignoré (filtre anti-redondance).",
+                target_state,
+            )
+            return
+
+        _LOGGER.info("DomoLink-Tado: Bascule de présence du domicile -> %s", target_state)
+        if self.data:
+            self.data["presence"] = target_state
+            self.async_set_updated_data(self.data)
+
         await self.client.set_presence(self.home_id, home)
-        await self.async_request_refresh()
+        self._last_home_state_time = 0.0
+
+    def _check_automated_geofencing(self, current_presence: str | None = None) -> None:
+        """Check Home Assistant person or zone states and automatically sync Tado presence if enabled."""
+        if not self.entry.options.get(CONF_AUTO_GEOFENCING_ENABLED, DEFAULT_AUTO_GEOFENCING_ENABLED):
+            return
+
+        if not hasattr(self.hass, "states") or self.hass.states is None:
+            return
+
+        persons_str = str(
+            self.entry.options.get(CONF_GEOFENCING_PERSONS, DEFAULT_GEOFENCING_PERSONS)
+        ).strip()
+        tracked_entities = [p.strip() for p in persons_str.split(",") if p.strip()]
+
+        target_home: bool | None = None
+
+        if tracked_entities:
+            states = [self.hass.states.get(ent) for ent in tracked_entities]
+            valid_states = [s for s in states if s is not None and s.state not in ("unknown", "unavailable")]
+            if valid_states:
+                # If ANY tracked entity is "home" or "on", someone is home
+                if any(s.state.lower() in ("home", "on") for s in valid_states):
+                    target_home = True
+                else:
+                    target_home = False
+        else:
+            # Fallback: inspect zone.home count
+            zone_home = self.hass.states.get("zone.home")
+            if zone_home and zone_home.state not in ("unknown", "unavailable"):
+                try:
+                    count = int(float(zone_home.state))
+                    target_home = count > 0
+                except (ValueError, TypeError):
+                    pass
+
+        if target_home is not None:
+            target_state = "HOME" if target_home else "AWAY"
+            eff_current = current_presence or (self.data.get("presence") if self.data else None)
+            if eff_current and eff_current != target_state:
+                _LOGGER.info(
+                    "DomoLink-Tado: Geofencing automatique HA -> bascule de présence vers %s",
+                    target_state,
+                )
+                self.hass.async_create_task(self.async_set_presence(target_home))
+
+    async def async_smart_boost(
+        self,
+        target_temp: float | None = None,
+        duration_seconds: int | None = None,
+        target_zone_ids: list[int] | None = None,
+    ) -> None:
+        """Boost heating across all zones (or target subset) for a temporary duration."""
+        boost_temp = (
+            float(target_temp)
+            if target_temp is not None
+            else float(self.entry.options.get(CONF_SMART_BOOST_TEMP, DEFAULT_SMART_BOOST_TEMP))
+        )
+        boost_dur = (
+            int(duration_seconds)
+            if duration_seconds is not None
+            else int(self.entry.options.get(CONF_SMART_BOOST_DURATION, DEFAULT_SMART_BOOST_DURATION))
+        )
+        _LOGGER.info(
+            "DomoLink-Tado: Lancement Smart Boost -> %.1f°C pendant %ds",
+            boost_temp,
+            boost_dur,
+        )
+        patch = {
+            "target_temperature": boost_temp,
+            "power": "ON",
+            "is_overlay_active": True,
+        }
+        await self._async_execute_all_zones(
+            f"Smart Boost {boost_temp}°C ({boost_dur}s)",
+            patch,
+            lambda zid: self.client.set_zone_overlay(
+                home_id=self.home_id,
+                zone_id=zid,
+                target_temp=boost_temp,
+                power="ON",
+                termination_type=OVERLAY_TIMER,
+                duration_seconds=boost_dur,
+            ),
+            target_zone_ids=target_zone_ids,
+        )
+
+    async def async_set_zone_boost(
+        self,
+        zone_id: int,
+        target_temp: float | None = None,
+        duration_seconds: int | None = None,
+    ) -> None:
+        """Boost a single zone for a temporary duration."""
+        boost_temp = (
+            float(target_temp)
+            if target_temp is not None
+            else float(self.entry.options.get(CONF_SMART_BOOST_TEMP, DEFAULT_SMART_BOOST_TEMP))
+        )
+        boost_dur = (
+            int(duration_seconds)
+            if duration_seconds is not None
+            else int(self.entry.options.get(CONF_SMART_BOOST_DURATION, DEFAULT_SMART_BOOST_DURATION))
+        )
+        await self.async_set_temperature(
+            zone_id,
+            target_temp=boost_temp,
+            termination_type=OVERLAY_TIMER,
+            duration_seconds=boost_dur,
+        )
+
+    async def async_set_water_heater_temperature(
+        self, zone_id: int, target_temp: float
+    ) -> None:
+        """Set target water temperature for a hot water zone."""
+        await self.async_set_temperature(
+            zone_id,
+            target_temp=target_temp,
+            termination_type=OVERLAY_NEXT_TIME_BLOCK,
+        )
+
+    async def async_set_water_heater_mode(
+        self, zone_id: int, mode: str
+    ) -> None:
+        """Set operation mode for a hot water zone (auto, off, heat)."""
+        if mode == "off":
+            await self.async_set_zone_off(zone_id)
+        elif mode == "auto":
+            await self.async_resume_schedule(zone_id)
+        elif mode == "heat":
+            current_target = (
+                self.data.get("zones", {}).get(zone_id, {}).get("target_temperature")
+                if self.data
+                else None
+            )
+            temp = float(current_target) if current_target is not None else 55.0
+            await self.async_set_temperature(
+                zone_id, target_temp=temp, termination_type=OVERLAY_NEXT_TIME_BLOCK
+            )
 
     async def async_set_temperature_offset(self, device_serial: str, offset: float) -> None:
         """Set calibration offset on a device."""

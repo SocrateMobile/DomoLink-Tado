@@ -16,11 +16,13 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .const import (
     CONF_ACCESS_TOKEN,
     CONF_ADAPTIVE_POLLING,
+    CONF_AUTO_GEOFENCING_ENABLED,
     CONF_AUTO_WINDOW_DURATION,
     CONF_AUTO_WINDOW_ENABLED,
     CONF_DYNAMIC_WINDOW_DROP,
     CONF_ECO_TEMP,
     CONF_EXPIRES_AT,
+    CONF_GEOFENCING_PERSONS,
     CONF_HOME_ID,
     CONF_HOME_NAME,
     CONF_OUTDOOR_WEATHER_ENTITY,
@@ -31,16 +33,22 @@ from .const import (
     CONF_PREHEAT_MODE,
     CONF_REFRESH_TOKEN,
     CONF_ROOM_LABELS,
+    CONF_SMART_BOOST_DURATION,
+    CONF_SMART_BOOST_TEMP,
     DEFAULT_ADAPTIVE_POLLING,
+    DEFAULT_AUTO_GEOFENCING_ENABLED,
     DEFAULT_AUTO_WINDOW_DURATION,
     DEFAULT_AUTO_WINDOW_ENABLED,
     DEFAULT_DYNAMIC_WINDOW_DROP,
     DEFAULT_ECO_TEMP,
+    DEFAULT_GEOFENCING_PERSONS,
     DEFAULT_OVERLAY_DURATION,
     DEFAULT_OVERLAY_MODE,
     DEFAULT_PREHEAT_ENABLED,
     DEFAULT_PREHEAT_MAX_DURATION,
     DEFAULT_PREHEAT_MODE,
+    DEFAULT_SMART_BOOST_DURATION,
+    DEFAULT_SMART_BOOST_TEMP,
     DOMAIN,
     NAME,
     OVERLAY_MANUAL,
@@ -314,6 +322,10 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_PREHEAT_MAX_DURATION: DEFAULT_PREHEAT_MAX_DURATION,
                         CONF_ECO_TEMP: DEFAULT_ECO_TEMP,
                         CONF_ADAPTIVE_POLLING: DEFAULT_ADAPTIVE_POLLING,
+                        CONF_AUTO_GEOFENCING_ENABLED: DEFAULT_AUTO_GEOFENCING_ENABLED,
+                        CONF_GEOFENCING_PERSONS: DEFAULT_GEOFENCING_PERSONS,
+                        CONF_SMART_BOOST_TEMP: DEFAULT_SMART_BOOST_TEMP,
+                        CONF_SMART_BOOST_DURATION: DEFAULT_SMART_BOOST_DURATION,
                     },
                 )
 
@@ -368,6 +380,10 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_PREHEAT_MAX_DURATION: DEFAULT_PREHEAT_MAX_DURATION,
                     CONF_ECO_TEMP: DEFAULT_ECO_TEMP,
                     CONF_ADAPTIVE_POLLING: DEFAULT_ADAPTIVE_POLLING,
+                    CONF_AUTO_GEOFENCING_ENABLED: DEFAULT_AUTO_GEOFENCING_ENABLED,
+                    CONF_GEOFENCING_PERSONS: DEFAULT_GEOFENCING_PERSONS,
+                    CONF_SMART_BOOST_TEMP: DEFAULT_SMART_BOOST_TEMP,
+                    CONF_SMART_BOOST_DURATION: DEFAULT_SMART_BOOST_DURATION,
                 },
             )
 
@@ -520,6 +536,30 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
                             CONF_OUTDOOR_WEATHER_ENTITY, ""
                         ),
                     ): str,
+                    vol.Optional(
+                        CONF_AUTO_GEOFENCING_ENABLED,
+                        default=self.config_entry.options.get(
+                            CONF_AUTO_GEOFENCING_ENABLED, DEFAULT_AUTO_GEOFENCING_ENABLED
+                        ),
+                    ): bool,
+                    vol.Optional(
+                        CONF_GEOFENCING_PERSONS,
+                        default=self.config_entry.options.get(
+                            CONF_GEOFENCING_PERSONS, DEFAULT_GEOFENCING_PERSONS
+                        ),
+                    ): str,
+                    vol.Optional(
+                        CONF_SMART_BOOST_TEMP,
+                        default=self.config_entry.options.get(
+                            CONF_SMART_BOOST_TEMP, DEFAULT_SMART_BOOST_TEMP
+                        ),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=15.0, max=30.0)),
+                    vol.Optional(
+                        CONF_SMART_BOOST_DURATION,
+                        default=self.config_entry.options.get(
+                            CONF_SMART_BOOST_DURATION, DEFAULT_SMART_BOOST_DURATION
+                        ),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=300, max=7200)),
                 }
             ),
         )

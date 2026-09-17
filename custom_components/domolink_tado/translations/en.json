@@ -60,7 +60,11 @@
           "preheat_max_duration": "Maximum preheating lead time (minutes)",
           "eco_temperature": "Global Eco mode target temperature (°C)",
           "adaptive_polling": "Smart adaptive polling (60s active heating, 5m idle)",
-          "outdoor_weather_entity": "Outdoor weather entity for ventilation advice (e.g. weather.home)"
+          "outdoor_weather_entity": "Outdoor weather entity for ventilation advice (e.g. weather.home)",
+          "auto_geofencing_enabled": "Automated Geofencing Bridge (Free Auto-Assist replacement)",
+          "geofencing_persons": "Person/tracker entities to track (e.g. person.john, person.mary or empty for zone.home)",
+          "smart_boost_temp": "Smart Boost Temperature (°C)",
+          "smart_boost_duration": "Smart Boost Duration (seconds)"
         }
       },
       "reauth_device": {
