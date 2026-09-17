@@ -53,6 +53,7 @@ if "homeassistant" not in sys.modules:
         TEMPERATURE = "temperature"
         HUMIDITY = "humidity"
         ENUM = "enum"
+        TIMESTAMP = "timestamp"
     class SensorStateClass:
         MEASUREMENT = "measurement"
     ha_sensor.SensorEntity = SensorEntity
@@ -159,10 +160,20 @@ from custom_components.domolink_tado.sensor import (
     DomolinkTadoZoneAbsoluteHumiditySensor,
     DomolinkTadoZoneMoldRiskSensor,
     DomolinkTadoOutdoorHumiditySensor,
+    DomolinkTadoZonePreheatAdvisorSensor,
+    DomolinkTadoZoneHeatingRateSensor,
 )
 from custom_components.domolink_tado.binary_sensor import (
     DomolinkTadoZoneMoldRiskProblemBinarySensor,
     DomolinkTadoZoneVentilationRecommendedBinarySensor,
+    DomolinkTadoZonePreheatNowBinarySensor,
+    DomolinkTadoZoneRapidWindowDropBinarySensor,
+)
+from custom_components.domolink_tado.adaptive_preheat import (
+    estimate_preheat_duration,
+    update_heating_rate,
+    detect_rapid_temperature_drop,
+    find_next_scheduled_change,
 )
 
 
@@ -633,6 +644,134 @@ class TestZonePhysicsDataAndSensors(unittest.IsolatedAsyncioTestCase):
 
         outdoor_hum_sensor = DomolinkTadoOutdoorHumiditySensor(coordinator)
         self.assertEqual(outdoor_hum_sensor.native_value, 75.0)
+
+
+class TestAdaptivePreheatAndRapidDrop(unittest.TestCase):
+    """Test adaptive preheat calculation, heating rate learning, and rapid drop detection."""
+
+    def test_estimate_preheat_duration_basic(self):
+        # 2.0 deg rise at 2.0 deg/h = 1.0 h = 60 min
+        self.assertEqual(estimate_preheat_duration(21.0, 19.0, 2.0), 60)
+        # 1.0 deg rise at 2.0 deg/h = 0.5 h = 30 min
+        self.assertEqual(estimate_preheat_duration(20.0, 19.0, 2.0), 30)
+        # Already at or above target
+        self.assertEqual(estimate_preheat_duration(19.0, 20.0, 2.0), 0)
+        self.assertEqual(estimate_preheat_duration(20.0, 20.0, 2.0), 0)
+        # None inputs
+        self.assertEqual(estimate_preheat_duration(None, 20.0, 2.0), 0)
+        self.assertEqual(estimate_preheat_duration(21.0, None, 2.0), 0)
+        # Max duration capping
+        self.assertEqual(estimate_preheat_duration(25.0, 15.0, 1.0, max_duration_minutes=90), 90)
+
+    def test_update_heating_rate_ema(self):
+        # 1.0 deg rise in 0.5 hours -> 2.0 deg/h measured
+        # 0.8 * 1.5 + 0.2 * 2.0 = 1.2 + 0.4 = 1.6
+        new_rate = update_heating_rate(1.5, 19.0, 20.0, 0.5)
+        self.assertEqual(new_rate, 1.6)
+
+        # Duration too short (< 0.2 hours = 12 min): should return old rate
+        unchanged = update_heating_rate(1.5, 19.0, 20.0, 0.1)
+        self.assertEqual(unchanged, 1.5)
+
+        # Temperature decreased: should return old rate
+        unchanged_drop = update_heating_rate(1.5, 20.0, 19.0, 0.5)
+        self.assertEqual(unchanged_drop, 1.5)
+
+    def test_detect_rapid_temperature_drop(self):
+        # Insufficient data
+        self.assertFalse(detect_rapid_temperature_drop([]))
+        self.assertFalse(detect_rapid_temperature_drop([(100.0, 20.0)]))
+
+        # Stable temperature
+        stable_history = [(100.0, 20.0), (200.0, 20.1), (300.0, 20.0)]
+        self.assertFalse(detect_rapid_temperature_drop(stable_history))
+
+        # Slow drop: 0.6 deg drop over 400s (exceeds max_seconds 300s)
+        slow_drop_history = [(0.0, 20.0), (100.0, 19.8), (400.0, 19.4)]
+        self.assertFalse(detect_rapid_temperature_drop(slow_drop_history, threshold_drop=0.5, max_seconds=300.0))
+
+        # Rapid drop: 0.7 deg drop in 240s
+        rapid_drop_history = [(0.0, 20.0), (120.0, 19.8), (240.0, 19.3)]
+        self.assertTrue(detect_rapid_temperature_drop(rapid_drop_history, threshold_drop=0.5, max_seconds=300.0))
+
+    def test_find_next_scheduled_change(self):
+        from datetime import datetime, timedelta
+        now = datetime(2026, 9, 17, 6, 0)  # Thursday 06:00
+        blocks = [
+            {
+                "dayType": "THURSDAY",
+                "start": "05:00",
+                "end": "07:00",
+                "setting": {"power": "ON", "temperature": {"celsius": 18.0}},
+            },
+            {
+                "dayType": "THURSDAY",
+                "start": "07:30",
+                "end": "22:00",
+                "setting": {"power": "ON", "temperature": {"celsius": 21.0}},
+            },
+        ]
+        res = find_next_scheduled_change(blocks, now)
+        self.assertIsNotNone(res)
+        self.assertEqual(res["start_dt"], datetime(2026, 9, 17, 7, 30))
+        self.assertEqual(res["target_temp"], 21.0)
+        self.assertEqual(res["power"], "ON")
+
+
+class TestPreheatSensorEntities(unittest.TestCase):
+    """Test preheat sensors and binary sensors."""
+
+    def setUp(self):
+        self.hass = MagicMock()
+        self.entry = MagicMock()
+        self.entry.options = {}
+        self.client = MagicMock(spec=TadoClient)
+        self.coordinator = DomolinkTadoCoordinator(self.hass, self.entry, self.client, 631338, "Maison Tado")
+        self.coordinator.data = {
+            "home_id": 631338,
+            "zones": {
+                36: {
+                    "zone_id": 36,
+                    "name": "Salon",
+                    "preheat_advisor": "2026-09-17T07:00:00",
+                    "preheat_duration": 30,
+                    "preheat_target_temp": 21.0,
+                    "preheat_now": True,
+                    "heating_rate": 1.75,
+                    "rapid_window_drop": True,
+                }
+            }
+        }
+
+    def test_preheat_advisor_sensor(self):
+        sensor = DomolinkTadoZonePreheatAdvisorSensor(self.coordinator, 36)
+        from datetime import datetime
+        self.assertEqual(sensor.native_value, datetime(2026, 9, 17, 7, 0))
+        attrs = sensor.extra_state_attributes
+        self.assertEqual(attrs["preheat_duration_minutes"], 30)
+        self.assertEqual(attrs["target_temperature"], 21.0)
+        self.assertEqual(attrs["heating_rate"], 1.75)
+
+    def test_preheat_advisor_sensor_none(self):
+        self.coordinator.data["zones"][36]["preheat_advisor"] = None
+        sensor = DomolinkTadoZonePreheatAdvisorSensor(self.coordinator, 36)
+        self.assertIsNone(sensor.native_value)
+
+    def test_heating_rate_sensor(self):
+        sensor = DomolinkTadoZoneHeatingRateSensor(self.coordinator, 36)
+        self.assertEqual(sensor.native_value, 1.75)
+
+    def test_preheat_now_binary_sensor(self):
+        sensor = DomolinkTadoZonePreheatNowBinarySensor(self.coordinator, 36)
+        self.assertTrue(sensor.is_on)
+        self.coordinator.data["zones"][36]["preheat_now"] = False
+        self.assertFalse(sensor.is_on)
+
+    def test_rapid_window_drop_binary_sensor(self):
+        sensor = DomolinkTadoZoneRapidWindowDropBinarySensor(self.coordinator, 36)
+        self.assertTrue(sensor.is_on)
+        self.coordinator.data["zones"][36]["rapid_window_drop"] = False
+        self.assertFalse(sensor.is_on)
 
 
 if __name__ == "__main__":

@@ -18,22 +18,38 @@ from .const import (
     CONF_ADAPTIVE_POLLING,
     CONF_AUTO_WINDOW_DURATION,
     CONF_AUTO_WINDOW_ENABLED,
+    CONF_DYNAMIC_WINDOW_DROP,
     CONF_ECO_TEMP,
     CONF_HOME_ID,
     CONF_HOME_NAME,
     CONF_OUTDOOR_WEATHER_ENTITY,
     CONF_OVERLAY_DURATION,
     CONF_OVERLAY_MODE,
+    CONF_PREHEAT_ENABLED,
+    CONF_PREHEAT_MAX_DURATION,
+    CONF_PREHEAT_MODE,
     CONF_ROOM_LABELS,
     DEFAULT_AUTO_WINDOW_DURATION,
     DEFAULT_AUTO_WINDOW_ENABLED,
+    DEFAULT_DYNAMIC_WINDOW_DROP,
     DEFAULT_ECO_TEMP,
+    DEFAULT_HEATING_RATE,
     DEFAULT_OVERLAY_MODE,
+    DEFAULT_PREHEAT_ENABLED,
+    DEFAULT_PREHEAT_MAX_DURATION,
+    DEFAULT_PREHEAT_MODE,
     DOMAIN,
     OVERLAY_MANUAL,
     OVERLAY_NEXT_TIME_BLOCK,
     OVERLAY_TIMER,
+    PREHEAT_MODE_AUTONOMOUS,
     UPDATE_INTERVAL_SECONDS,
+)
+from .adaptive_preheat import (
+    detect_rapid_temperature_drop,
+    estimate_preheat_duration,
+    find_next_scheduled_change,
+    update_heating_rate,
 )
 from .physics import (
     calculate_absolute_humidity,
@@ -77,6 +93,12 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_home_state_time: float = 0.0
         self._open_window_handled: dict[int, bool] = {}
         self._open_window_pending: set[int] = set()
+        self._zone_temp_history: dict[int, list[tuple[float, float]]] = {}
+        self._zone_heating_rates: dict[int, float] = {}
+        self._zone_heating_sessions: dict[int, dict[str, Any]] = {}
+        self._zone_schedules_raw: dict[int, list[dict[str, Any]]] = {}
+        self._last_schedule_fetch_time: dict[int, float] = {}
+        self._preheat_triggered: dict[int, bool] = {}
 
     def get_zone_labels(self, zone_id: int | str) -> list[str]:
         """Return configured labels for a given zone ID."""
@@ -184,6 +206,10 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             labels_map = self.entry.options.get(CONF_ROOM_LABELS, {})
             auto_window = self.entry.options.get(CONF_AUTO_WINDOW_ENABLED, DEFAULT_AUTO_WINDOW_ENABLED)
             window_duration = self.entry.options.get(CONF_AUTO_WINDOW_DURATION, DEFAULT_AUTO_WINDOW_DURATION)
+            dynamic_window = self.entry.options.get(CONF_DYNAMIC_WINDOW_DROP, DEFAULT_DYNAMIC_WINDOW_DROP)
+            preheat_enabled = self.entry.options.get(CONF_PREHEAT_ENABLED, DEFAULT_PREHEAT_ENABLED)
+            preheat_mode = self.entry.options.get(CONF_PREHEAT_MODE, DEFAULT_PREHEAT_MODE)
+            max_preheat_dur = self.entry.options.get(CONF_PREHEAT_MAX_DURATION, DEFAULT_PREHEAT_MAX_DURATION)
 
             for z in self._zones_raw:
                 zid = z.get("id")
@@ -235,13 +261,26 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 power = setting.get("power", "OFF") if setting else "OFF"
 
-                # Open window detection
+                # Open window detection native Tado
                 open_window = z_state.get("openWindow") is not None
 
-                # Bypass Auto-Assist: coupure automatique de la tête sur fenêtre ouverte
+                # Détection dynamique locale de chute brutale de température (fenêtre ouverte rapide)
+                rapid_drop = False
+                if inside_temp is not None:
+                    history = self._zone_temp_history.setdefault(zid, [])
+                    history.append((now, float(inside_temp)))
+                    # Conservation de l'historique sur 10 minutes (600s)
+                    self._zone_temp_history[zid] = [(t, v) for t, v in history if now - t <= 600]
+                    if dynamic_window:
+                        rapid_drop = detect_rapid_temperature_drop(
+                            self._zone_temp_history[zid], threshold_drop=0.5, max_seconds=300.0
+                        )
+
+                # Coupure automatique de sécurité si fenêtre ouverte (Tado natif ou Chute brutale locale)
+                window_cutoff_condition = open_window or (dynamic_window and rapid_drop and heating_power > 0)
                 if (
                     auto_window
-                    and open_window
+                    and window_cutoff_condition
                     and not self._open_window_handled.get(zid, False)
                     and zid not in self._open_window_pending
                 ):
@@ -251,8 +290,103 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             zid, z.get("name", f"Zone {zid}"), window_duration
                         )
                     )
-                elif not open_window:
+                elif not open_window and not (dynamic_window and rapid_drop):
                     self._open_window_handled[zid] = False
+
+                # Apprentissage automatique de la vitesse de chauffe réelle (°C/h) par EMA
+                current_rate = self._zone_heating_rates.get(zid, DEFAULT_HEATING_RATE)
+                if inside_temp is not None:
+                    if heating_power > 20:
+                        if zid not in self._zone_heating_sessions:
+                            self._zone_heating_sessions[zid] = {"time": now, "temp": float(inside_temp)}
+                        else:
+                            session = self._zone_heating_sessions[zid]
+                            duration_h = (now - session["time"]) / 3600.0
+                            if duration_h >= 2.0:
+                                if float(inside_temp) > session["temp"]:
+                                    current_rate = update_heating_rate(
+                                        current_rate, session["temp"], float(inside_temp), duration_h
+                                    )
+                                    self._zone_heating_rates[zid] = current_rate
+                                self._zone_heating_sessions[zid] = {"time": now, "temp": float(inside_temp)}
+                    else:
+                        if zid in self._zone_heating_sessions:
+                            session = self._zone_heating_sessions.pop(zid)
+                            duration_h = (now - session["time"]) / 3600.0
+                            if duration_h >= 0.2 and float(inside_temp) > session["temp"]:
+                                current_rate = update_heating_rate(
+                                    current_rate, session["temp"], float(inside_temp), duration_h
+                                )
+                                self._zone_heating_rates[zid] = current_rate
+                                _LOGGER.debug(
+                                    "DomoLink-Tado: Vitesse de chauffe actualisée zone %s: %.2f °C/h",
+                                    zid,
+                                    current_rate,
+                                )
+
+                # Récupération du planning de la zone (mis en cache 6h pour respecter les quotas API)
+                timetable_blocks = self._zone_schedules_raw.get(zid, [])
+                last_sched_time = self._last_schedule_fetch_time.get(zid, 0.0)
+                if preheat_enabled and (not timetable_blocks or (now - last_sched_time > 21600)):
+                    try:
+                        active_tt = await self.client.get_active_timetable(self.home_id, zid)
+                        if active_tt and "id" in active_tt:
+                            blocks = await self.client.get_timetable_blocks(
+                                self.home_id, zid, active_tt["id"]
+                            )
+                            if blocks is not None:
+                                self._zone_schedules_raw[zid] = blocks
+                                self._last_schedule_fetch_time[zid] = now
+                                timetable_blocks = blocks
+                    except Exception as err:
+                        _LOGGER.debug(
+                            "DomoLink-Tado: Impossible de charger le planning pour la zone %s: %s",
+                            zid,
+                            err,
+                        )
+
+                # Calcul de la préchauffe adaptative locale
+                preheat_now = False
+                preheat_advisor: str | None = None
+                preheat_duration = 0
+                preheat_target_temp: float | None = None
+
+                if preheat_enabled and timetable_blocks:
+                    current_dt = datetime.now()
+                    next_change = find_next_scheduled_change(timetable_blocks, current_dt)
+                    if next_change and next_change.get("power") == "ON" and next_change.get("target_temp") is not None:
+                        sched_target = float(next_change["target_temp"])
+                        if inside_temp is not None and sched_target > float(inside_temp):
+                            preheat_duration = estimate_preheat_duration(
+                                sched_target, float(inside_temp), current_rate, max_preheat_dur
+                            )
+                            if preheat_duration > 0:
+                                start_preheat_dt = next_change["start_dt"] - timedelta(minutes=preheat_duration)
+                                preheat_advisor = start_preheat_dt.isoformat()
+                                preheat_target_temp = sched_target
+
+                                if current_dt >= start_preheat_dt and current_dt < next_change["start_dt"]:
+                                    preheat_now = True
+
+                                # Mode autonome : application automatique de la consigne anticipée
+                                if preheat_mode == PREHEAT_MODE_AUTONOMOUS and preheat_now:
+                                    if not self._preheat_triggered.get(zid, False):
+                                        self._preheat_triggered[zid] = True
+                                        _LOGGER.info(
+                                            "DomoLink-Tado: Démarrage préchauffe autonome zone %s -> %.1f°C (%s min d'avance)",
+                                            zid,
+                                            sched_target,
+                                            preheat_duration,
+                                        )
+                                        self.hass.async_create_task(
+                                            self.async_set_temperature(
+                                                zid,
+                                                target_temp=sched_target,
+                                                termination_type=OVERLAY_NEXT_TIME_BLOCK,
+                                            )
+                                        )
+                                elif not preheat_now:
+                                    self._preheat_triggered[zid] = False
 
                 # Étiquettes de la pièce
                 room_labels = labels_map.get(str(zid), [])
@@ -282,6 +416,12 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "overlay": overlay,
                     "is_overlay_active": overlay is not None,
                     "open_window": open_window,
+                    "rapid_window_drop": rapid_drop,
+                    "heating_rate": current_rate,
+                    "preheat_advisor": preheat_advisor,
+                    "preheat_duration": preheat_duration,
+                    "preheat_target_temp": preheat_target_temp,
+                    "preheat_now": preheat_now,
                     "dew_point": dew_point,
                     "absolute_humidity": absolute_humidity,
                     "mold_risk_level": mold_risk_level,

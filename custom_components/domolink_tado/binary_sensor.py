@@ -38,6 +38,8 @@ async def async_setup_entry(
         entities.append(DomolinkTadoOverlayActiveBinarySensor(coordinator, zone_id))
         entities.append(DomolinkTadoZoneMoldRiskProblemBinarySensor(coordinator, zone_id))
         entities.append(DomolinkTadoZoneVentilationRecommendedBinarySensor(coordinator, zone_id))
+        entities.append(DomolinkTadoZonePreheatNowBinarySensor(coordinator, zone_id))
+        entities.append(DomolinkTadoZoneRapidWindowDropBinarySensor(coordinator, zone_id))
 
     # 3. Device Binary Sensors (Battery alert & Connection)
     devices = coordinator.data.get("devices", {})
@@ -170,6 +172,37 @@ class DomolinkTadoZoneVentilationRecommendedBinarySensor(DomolinkTadoZoneBinaryS
     @property
     def is_on(self) -> bool:
         return bool(self._zone_data.get("ventilation_recommended", False))
+
+
+class DomolinkTadoZonePreheatNowBinarySensor(DomolinkTadoZoneBinarySensorBase):
+    """Binary sensor indicating if zone is currently actively preheating."""
+
+    _attr_icon = "mdi:fire-alert"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator, zone_id: int) -> None:
+        super().__init__(coordinator, zone_id)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{zone_id}_preheat_now"
+        self._attr_name = f"{self._zone_data.get('name', 'Zone')} Préchauffe en Cours"
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._zone_data.get("preheat_now", False))
+
+
+class DomolinkTadoZoneRapidWindowDropBinarySensor(DomolinkTadoZoneBinarySensorBase):
+    """Binary sensor indicating a detected sudden temperature drop (open window)."""
+
+    _attr_device_class = BinarySensorDeviceClass.WINDOW
+    _attr_icon = "mdi:thermometer-chevron-down"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator, zone_id: int) -> None:
+        super().__init__(coordinator, zone_id)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{zone_id}_rapid_window_drop"
+        self._attr_name = f"{self._zone_data.get('name', 'Zone')} Chute Brutale Température"
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._zone_data.get("rapid_window_drop", False))
 
 
 # ── Device Binary Sensors ───────────────────────────────────

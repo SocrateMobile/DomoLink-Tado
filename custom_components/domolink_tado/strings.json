@@ -54,6 +54,10 @@
           "overlay_duration": "Durée de la minuterie manuelle (secondes)",
           "auto_window_enabled": "Détection fenêtre ouverte : coupure automatique du radiateur",
           "auto_window_duration": "Durée de coupure lors d'une fenêtre ouverte (secondes)",
+          "dynamic_window_drop": "Détection dynamique rapide de chute thermique (fenêtre)",
+          "preheat_enabled": "Préchauffage adaptatif local (remplacement Auto-Assist)",
+          "preheat_mode": "Mode de préchauffage (Conseiller ou Autonome)",
+          "preheat_max_duration": "Durée maximale d'anticipation de préchauffe (minutes)",
           "eco_temperature": "Température du mode Éco global (°C)",
           "adaptive_polling": "Polling adaptatif intelligent (60s en chauffe, 5min au repos)",
           "outdoor_weather_entity": "Entité météo extérieure pour l'aération (ex: weather.home)"
