@@ -55,7 +55,8 @@
           "auto_window_enabled": "Détection fenêtre ouverte : coupure automatique du radiateur",
           "auto_window_duration": "Durée de coupure lors d'une fenêtre ouverte (secondes)",
           "eco_temperature": "Température du mode Éco global (°C)",
-          "adaptive_polling": "Polling adaptatif intelligent (60s en chauffe, 5min au repos)"
+          "adaptive_polling": "Polling adaptatif intelligent (60s en chauffe, 5min au repos)",
+          "outdoor_weather_entity": "Entité météo extérieure pour l'aération (ex: weather.home)"
         }
       },
       "reauth_device": {

@@ -55,7 +55,8 @@
           "auto_window_enabled": "Open window detection: automatically turn off heating",
           "auto_window_duration": "Window open shutoff duration (seconds)",
           "eco_temperature": "Global Eco mode target temperature (°C)",
-          "adaptive_polling": "Smart adaptive polling (60s active heating, 5m idle)"
+          "adaptive_polling": "Smart adaptive polling (60s active heating, 5m idle)",
+          "outdoor_weather_entity": "Outdoor weather entity for ventilation advice (e.g. weather.home)"
         }
       },
       "reauth_device": {

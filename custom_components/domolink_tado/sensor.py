@@ -31,6 +31,7 @@ async def async_setup_entry(
 
     # 1. Global Home Sensors
     entities.append(DomolinkTadoOutdoorTempSensor(coordinator))
+    entities.append(DomolinkTadoOutdoorHumiditySensor(coordinator))
     entities.append(DomolinkTadoActiveHeatingZonesSensor(coordinator))
     entities.append(DomolinkTadoTotalHeatingPowerSensor(coordinator))
 
@@ -41,6 +42,9 @@ async def async_setup_entry(
         entities.append(DomolinkTadoZoneTargetTempSensor(coordinator, zone_id))
         entities.append(DomolinkTadoZoneHumiditySensor(coordinator, zone_id))
         entities.append(DomolinkTadoZoneHeatingPowerSensor(coordinator, zone_id))
+        entities.append(DomolinkTadoZoneDewPointSensor(coordinator, zone_id))
+        entities.append(DomolinkTadoZoneAbsoluteHumiditySensor(coordinator, zone_id))
+        entities.append(DomolinkTadoZoneMoldRiskSensor(coordinator, zone_id))
 
     # 3. Device Battery Sensors (Valves & Thermostats)
     devices = coordinator.data.get("devices", {})
@@ -77,6 +81,32 @@ class DomolinkTadoOutdoorTempSensor(CoordinatorEntity[DomolinkTadoCoordinator], 
     @property
     def native_value(self) -> float | None:
         return self.coordinator.data.get("weather", {}).get("outdoor_temperature")
+
+
+class DomolinkTadoOutdoorHumiditySensor(CoordinatorEntity[DomolinkTadoCoordinator], SensorEntity):
+    """Sensor for outdoor humidity."""
+
+    _attr_device_class = SensorDeviceClass.HUMIDITY
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = PERCENTAGE
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_outdoor_humidity"
+        self._attr_name = "Tado Humidité Extérieure"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
+            name=f"Tado {self.coordinator.home_name}",
+            manufacturer="Tado (DomoLink)",
+            model="Home Hub",
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        return self.coordinator.data.get("weather", {}).get("outdoor_humidity")
 
 
 class DomolinkTadoActiveHeatingZonesSensor(CoordinatorEntity[DomolinkTadoCoordinator], SensorEntity):
@@ -223,6 +253,58 @@ class DomolinkTadoZoneHeatingPowerSensor(DomolinkTadoZoneSensorBase):
     @property
     def native_value(self) -> float:
         return round(float(self._zone_data.get("heating_power", 0.0)), 1)
+
+
+class DomolinkTadoZoneDewPointSensor(DomolinkTadoZoneSensorBase):
+    """Sensor for zone calculated dew point."""
+
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_icon = "mdi:water-thermometer"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator, zone_id: int) -> None:
+        super().__init__(coordinator, zone_id)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{zone_id}_dew_point"
+        self._attr_name = f"{self._zone_data.get('name', 'Zone')} Point de Rosée"
+
+    @property
+    def native_value(self) -> float | None:
+        return self._zone_data.get("dew_point")
+
+
+class DomolinkTadoZoneAbsoluteHumiditySensor(DomolinkTadoZoneSensorBase):
+    """Sensor for zone calculated absolute humidity in g/m³."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "g/m³"
+    _attr_icon = "mdi:water-percent"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator, zone_id: int) -> None:
+        super().__init__(coordinator, zone_id)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{zone_id}_absolute_humidity"
+        self._attr_name = f"{self._zone_data.get('name', 'Zone')} Humidité Absolue"
+
+    @property
+    def native_value(self) -> float | None:
+        return self._zone_data.get("absolute_humidity")
+
+
+class DomolinkTadoZoneMoldRiskSensor(DomolinkTadoZoneSensorBase):
+    """Sensor for zone mold risk assessment level."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = ["normal", "low", "medium", "high"]
+    _attr_icon = "mdi:alert-decagram-outline"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator, zone_id: int) -> None:
+        super().__init__(coordinator, zone_id)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{zone_id}_mold_risk"
+        self._attr_name = f"{self._zone_data.get('name', 'Zone')} Risque Moisissure"
+
+    @property
+    def native_value(self) -> str | None:
+        return self._zone_data.get("mold_risk_level")
 
 
 # ── Device Battery Sensor ───────────────────────────────────

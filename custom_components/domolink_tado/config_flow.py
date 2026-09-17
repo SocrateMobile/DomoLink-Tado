@@ -22,6 +22,7 @@ from .const import (
     CONF_EXPIRES_AT,
     CONF_HOME_ID,
     CONF_HOME_NAME,
+    CONF_OUTDOOR_WEATHER_ENTITY,
     CONF_OVERLAY_DURATION,
     CONF_OVERLAY_MODE,
     CONF_REFRESH_TOKEN,
@@ -466,6 +467,12 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
                             CONF_ADAPTIVE_POLLING, DEFAULT_ADAPTIVE_POLLING
                         ),
                     ): bool,
+                    vol.Optional(
+                        CONF_OUTDOOR_WEATHER_ENTITY,
+                        default=self.config_entry.options.get(
+                            CONF_OUTDOOR_WEATHER_ENTITY, ""
+                        ),
+                    ): str,
                 }
             ),
         )
