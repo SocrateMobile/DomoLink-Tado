@@ -73,7 +73,7 @@ class DomolinkTadoPresenceBinarySensor(CoordinatorEntity[DomolinkTadoCoordinator
 
     @property
     def is_on(self) -> bool:
-        return self.coordinator.data.get("presence") == "HOME"
+        return (self.coordinator.data or {}).get("presence") == "HOME"
 
 
 # ── Zone Binary Sensors ─────────────────────────────────────
@@ -87,7 +87,7 @@ class DomolinkTadoZoneBinarySensorBase(CoordinatorEntity[DomolinkTadoCoordinator
 
     @property
     def _zone_data(self) -> dict[str, Any]:
-        return self.coordinator.data.get("zones", {}).get(self.zone_id, {})
+        return (self.coordinator.data or {}).get("zones", {}).get(self.zone_id, {})
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -115,7 +115,7 @@ class DomolinkTadoOpenWindowBinarySensor(DomolinkTadoZoneBinarySensorBase):
 
 
 class DomolinkTadoHeatingActiveBinarySensor(DomolinkTadoZoneBinarySensorBase):
-    """Binary sensor indicating if zone is currently heating."""
+    """Binary sensor indicating if zone is actively heating."""
 
     _attr_device_class = BinarySensorDeviceClass.HEAT
 
@@ -126,7 +126,7 @@ class DomolinkTadoHeatingActiveBinarySensor(DomolinkTadoZoneBinarySensorBase):
 
     @property
     def is_on(self) -> bool:
-        return float(self._zone_data.get("heating_power", 0.0)) > 0
+        return float(self._zone_data.get("heating_power") or 0.0) > 0
 
 
 class DomolinkTadoOverlayActiveBinarySensor(DomolinkTadoZoneBinarySensorBase):
@@ -216,7 +216,7 @@ class DomolinkTadoDeviceBinarySensorBase(CoordinatorEntity[DomolinkTadoCoordinat
 
     @property
     def _device_data(self) -> dict[str, Any]:
-        return self.coordinator.data.get("devices", {}).get(self.serial_number, {})
+        return (self.coordinator.data or {}).get("devices", {}).get(self.serial_number, {})
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -256,4 +256,4 @@ class DomolinkTadoDeviceConnectionBinarySensor(DomolinkTadoDeviceBinarySensorBas
 
     @property
     def is_on(self) -> bool:
-        return bool(self._device_data.get("connectionState", {}).get("value", True))
+        return bool((self._device_data.get("connectionState") or {}).get("value", True))

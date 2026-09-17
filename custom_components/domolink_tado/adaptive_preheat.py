@@ -159,9 +159,10 @@ def find_next_scheduled_change(
                 continue
 
             if block_dt > current_dt:
-                setting = b.get("setting", {})
+                setting = b.get("setting") or {}
                 power = setting.get("power", "OFF")
-                temp = setting.get("temperature", {}).get("celsius") if power == "ON" else None
+                temp_obj = setting.get("temperature") or {}
+                temp = temp_obj.get("celsius") if power == "ON" else None
                 candidates.append({
                     "start_dt": block_dt,
                     "target_temp": temp,

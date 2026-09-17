@@ -1599,3 +1599,172 @@ class TestOptionsFlowExternalSensors(unittest.IsolatedAsyncioTestCase):
             {"1": "sensor.salon_hum"},
         )
 
+
+class TestAuditFixes(unittest.IsolatedAsyncioTestCase):
+    """Unit tests validating audit fixes (Sprint 1, 2, 3)."""
+
+    async def test_timer_overlay_zero_duration_respected(self):
+        """m-2: Test that duration_seconds=0 is not overwritten with 3600."""
+        from datetime import datetime
+        from custom_components.domolink_tado.const import OVERLAY_TIMER
+        client = TadoClient(MagicMock())
+        client._request = AsyncMock(return_value={"mock": True})
+        await client.set_zone_overlay(
+            home_id=123,
+            zone_id=1,
+            target_temp=21.0,
+            power="ON",
+            termination_type=OVERLAY_TIMER,
+            duration_seconds=0,
+        )
+        _, kwargs = client._request.call_args
+        termination = kwargs["json_data"]["termination"]
+        self.assertEqual(termination["durationInSeconds"], 0)
+
+    def test_adaptive_preheat_null_setting_handling(self):
+        """M-17: Test that find_next_scheduled_change handles blocks with null setting or temperature."""
+        from datetime import datetime
+        blocks = [
+            {
+                "dayType": "MONDAY",
+                "start": "08:00",
+                "end": "12:00",
+                "setting": None,
+            },
+            {
+                "dayType": "MONDAY",
+                "start": "12:00",
+                "end": "18:00",
+                "setting": {
+                    "power": "ON",
+                    "temperature": None,
+                },
+            },
+            {
+                "dayType": "MONDAY",
+                "start": "18:00",
+                "end": "22:00",
+                "setting": {
+                    "power": "ON",
+                    "temperature": {"celsius": 21.5},
+                },
+            },
+        ]
+        # Current time at Monday 07:00
+        now = datetime(2026, 9, 21, 7, 0)  # 2026-09-21 is a Monday
+        result = find_next_scheduled_change(blocks, now)
+        self.assertIsNotNone(result)
+        self.assertEqual(result["power"], "OFF")
+
+    async def test_climate_fan_mode_temperature_suppression(self):
+        """M-13: Test that setting fan mode when mode is FAN does not send target_temp."""
+        coordinator = MagicMock()
+        coordinator.home_id = 123
+        coordinator.data = {
+            "zones": {
+                1: {
+                    "name": "Clim Salon",
+                    "type": "AIR_CONDITIONING",
+                    "ac_mode": "FAN",
+                    "target_temperature": 22.0,
+                }
+            }
+        }
+        coordinator.async_set_ac_mode = AsyncMock()
+        entry = MagicMock()
+        entry.options = {}
+
+        climate = DomolinkTadoClimate(coordinator, entry, 1)
+        await climate.async_set_fan_mode("high")
+
+        coordinator.async_set_ac_mode.assert_called_once()
+        _, kwargs = coordinator.async_set_ac_mode.call_args
+        self.assertIsNone(kwargs["target_temp"])
+        self.assertEqual(kwargs["mode"], "FAN")
+
+    async def test_climate_set_temperature_in_fan_mode_switches_to_cool(self):
+        """M-14: Test that calling set_temperature in FAN mode auto-switches to COOL."""
+        coordinator = MagicMock()
+        coordinator.home_id = 123
+        coordinator.data = {
+            "zones": {
+                1: {
+                    "name": "Clim Salon",
+                    "type": "AIR_CONDITIONING",
+                    "ac_mode": "FAN",
+                    "target_temperature": 22.0,
+                }
+            }
+        }
+        coordinator.async_set_ac_mode = AsyncMock()
+        entry = MagicMock()
+        entry.options = {}
+
+        climate = DomolinkTadoClimate(coordinator, entry, 1)
+        await climate.async_set_temperature(temperature=23.0)
+
+        coordinator.async_set_ac_mode.assert_called_once()
+        _, kwargs = coordinator.async_set_ac_mode.call_args
+        self.assertEqual(kwargs["mode"], "COOL")
+        self.assertEqual(kwargs["target_temp"], 23.0)
+
+    def test_climate_extra_attributes_battery_zero_not_overwritten(self):
+        """M-12: Test that battery percentage 0% is preserved and not overwritten to 100%."""
+        coordinator = MagicMock()
+        coordinator.home_id = 123
+        coordinator.get_zone_labels = MagicMock(return_value=[])
+        coordinator.data = {
+            "zones": {
+                1: {
+                    "name": "Radiateur",
+                    "type": "HEATING",
+                    "devices": [
+                        {
+                            "serialNo": "VA123",
+                            "batteryState": "NORMAL",
+                            "batteryPercentage": 0,
+                        }
+                    ],
+                }
+            }
+        }
+        entry = MagicMock()
+        entry.options = {}
+
+        climate = DomolinkTadoClimate(coordinator, entry, 1)
+        attrs = climate.extra_state_attributes
+        self.assertEqual(attrs["devices"][0]["battery_percentage"], 0)
+
+    async def test_coordinator_optimistic_rollback_prevented_when_data_replaced(self):
+        """M-4: Test that optimistic rollback is skipped if self.data reference was refreshed."""
+        coordinator = MagicMock()
+        coordinator.home_id = 123
+        initial_data = {
+            "zones": {
+                1: {"target_temperature": 20.0}
+            }
+        }
+        refreshed_data = {
+            "zones": {
+                1: {"target_temperature": 22.0}
+            }
+        }
+        coordinator.data = initial_data
+
+        async def failing_api():
+            # Simuler un polling d'arrière-plan qui remplace coordinator.data pendant l'appel
+            coordinator.data = refreshed_data
+            raise TadoError("API Timeout")
+
+        with self.assertRaises(TadoError):
+            await DomolinkTadoCoordinator._async_optimistic_zone_update(
+                coordinator,
+                zone_id=1,
+                optimistic_patch={"target_temperature": 25.0},
+                coro=failing_api(),
+            )
+
+        # L'état rafraîchi (22.0) NE doit PAS avoir été écrasé par l'ancien backup (20.0)
+        self.assertEqual(coordinator.data["zones"][1]["target_temperature"], 22.0)
+
+

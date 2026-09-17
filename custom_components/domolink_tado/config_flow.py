@@ -115,16 +115,14 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 # Petite pause préventive de 1.2s pour éviter le rate limit en rafale (burst)
                 await asyncio.sleep(1.2)
 
-                # 2. Récupération du profil et de la maison
+                # 2. Création du client API (une seule fois)
                 client = TadoClient(
                     session=session,
                     access_token=tokens["access_token"],
                     refresh_token=tokens.get("refresh_token"),
                     expires_at=tokens.get("expires_at"),
                 )
-                me = await client.get_me()
-                if not me or not isinstance(me, dict):
-                    raise TadoError("Serveurs Tado temporairement indisponibles (profil non récupéré).")
+
                 home_id: int | None = None
                 home_name: str = "Tado Home"
 
@@ -141,12 +139,6 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
                 # 2. Récupération automatique du profil et du domicile si non fourni manuellement
                 if home_id is None:
-                    client = TadoClient(
-                        session=session,
-                        access_token=tokens["access_token"],
-                        refresh_token=tokens.get("refresh_token"),
-                        expires_at=tokens.get("expires_at"),
-                    )
                     me = await client.get_me()
                     if not me or not isinstance(me, dict):
                         raise TadoError("Serveurs Tado temporairement indisponibles (profil non récupéré).")
@@ -183,7 +175,7 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             **self._reauth_entry.data,
                             CONF_ACCESS_TOKEN: tokens["access_token"],
                             CONF_REFRESH_TOKEN: tokens.get("refresh_token"),
-                            CONF_EXPIRES_AT: tokens["expires_at"],
+                            CONF_EXPIRES_AT: tokens.get("expires_at", time.time() + 3600),
                         },
                     )
                     await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
@@ -203,7 +195,7 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_HOME_NAME: home_name,
                         CONF_ACCESS_TOKEN: tokens["access_token"],
                         CONF_REFRESH_TOKEN: tokens.get("refresh_token"),
-                        CONF_EXPIRES_AT: tokens["expires_at"],
+                        CONF_EXPIRES_AT: tokens.get("expires_at", time.time() + 3600),
                     },
                     options={
                         CONF_ROOM_LABELS: {},
@@ -604,7 +596,7 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
                         **self.config_entry.data,
                         CONF_ACCESS_TOKEN: tokens["access_token"],
                         CONF_REFRESH_TOKEN: tokens.get("refresh_token"),
-                        CONF_EXPIRES_AT: tokens["expires_at"],
+                        CONF_EXPIRES_AT: tokens.get("expires_at", time.time() + 3600),
                     },
                 )
                 await self.hass.config_entries.async_reload(self.config_entry.entry_id)

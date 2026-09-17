@@ -92,7 +92,7 @@ class DomolinkTadoOutdoorTempSensor(CoordinatorEntity[DomolinkTadoCoordinator], 
 
     @property
     def native_value(self) -> float | None:
-        return self.coordinator.data.get("weather", {}).get("outdoor_temperature")
+        return ((self.coordinator.data or {}).get("weather") or {}).get("outdoor_temperature")
 
 
 class DomolinkTadoOutdoorHumiditySensor(CoordinatorEntity[DomolinkTadoCoordinator], SensorEntity):
@@ -118,7 +118,7 @@ class DomolinkTadoOutdoorHumiditySensor(CoordinatorEntity[DomolinkTadoCoordinato
 
     @property
     def native_value(self) -> float | None:
-        return self.coordinator.data.get("weather", {}).get("outdoor_humidity")
+        return ((self.coordinator.data or {}).get("weather") or {}).get("outdoor_humidity")
 
 
 class DomolinkTadoActiveHeatingZonesSensor(CoordinatorEntity[DomolinkTadoCoordinator], SensorEntity):
@@ -169,10 +169,10 @@ class DomolinkTadoTotalHeatingPowerSensor(CoordinatorEntity[DomolinkTadoCoordina
 
     @property
     def native_value(self) -> float:
-        zones = self.coordinator.data.get("zones", {})
+        zones = (self.coordinator.data or {}).get("zones", {})
         if not zones:
             return 0.0
-        total = sum(z.get("heating_power", 0.0) for z in zones.values())
+        total = sum(float(z.get("heating_power") or 0.0) for z in zones.values())
         return round(total / len(zones), 1)
 
 
@@ -199,11 +199,11 @@ class DomolinkTadoQuotaRemainingSensor(CoordinatorEntity[DomolinkTadoCoordinator
 
     @property
     def native_value(self) -> int | None:
-        return self.coordinator.data.get("rate_limit", {}).get("remaining")
+        return ((self.coordinator.data or {}).get("rate_limit") or {}).get("remaining")
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        rl = self.coordinator.data.get("rate_limit", {})
+        rl = (self.coordinator.data or {}).get("rate_limit") or {}
         return {
             "quota_limit": rl.get("limit"),
             "reset_seconds": rl.get("reset_seconds"),
@@ -234,7 +234,7 @@ class DomolinkTadoQuotaLimitSensor(CoordinatorEntity[DomolinkTadoCoordinator], S
 
     @property
     def native_value(self) -> int | None:
-        return self.coordinator.data.get("rate_limit", {}).get("limit")
+        return ((self.coordinator.data or {}).get("rate_limit") or {}).get("limit")
 
 
 # ── Zone Sensors ────────────────────────────────────────────
@@ -248,7 +248,7 @@ class DomolinkTadoZoneSensorBase(CoordinatorEntity[DomolinkTadoCoordinator], Sen
 
     @property
     def _zone_data(self) -> dict[str, Any]:
-        return self.coordinator.data.get("zones", {}).get(self.zone_id, {})
+        return (self.coordinator.data or {}).get("zones", {}).get(self.zone_id, {})
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -345,7 +345,7 @@ class DomolinkTadoZoneHeatingPowerSensor(DomolinkTadoZoneSensorBase):
 
     @property
     def native_value(self) -> float:
-        return round(float(self._zone_data.get("heating_power", 0.0)), 1)
+        return round(float(self._zone_data.get("heating_power") or 0.0), 1)
 
 
 class DomolinkTadoZoneDewPointSensor(DomolinkTadoZoneSensorBase):
