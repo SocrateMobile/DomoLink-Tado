@@ -400,19 +400,13 @@ class TadoClient:
             setting["temperature"] = {"celsius": round(float(target_temp), 1)}
 
         termination: dict[str, Any] = {}
-        if termination_type == OVERLAY_NEXT_TIME_BLOCK:
-            termination["type"] = "TADO_MODE"
-            termination["typeSkillBasedApp"] = "TADO_MODE"
-        elif termination_type == OVERLAY_MANUAL:
-            termination["type"] = "MANUAL"
+        if termination_type == OVERLAY_MANUAL:
             termination["typeSkillBasedApp"] = "MANUAL"
         elif termination_type == OVERLAY_TIMER:
-            termination["type"] = "TIMER"
             termination["typeSkillBasedApp"] = "TIMER"
             termination["durationInSeconds"] = int(duration_seconds or 3600)
         else:
-            termination["type"] = "TADO_MODE"
-            termination["typeSkillBasedApp"] = "TADO_MODE"
+            termination["typeSkillBasedApp"] = "NEXT_TIME_BLOCK"
 
         payload = {
             "setting": setting,

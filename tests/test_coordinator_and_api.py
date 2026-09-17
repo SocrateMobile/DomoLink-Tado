@@ -305,5 +305,65 @@ class TestConfigFlowAndTokenParsing(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res["errors"]["base"], "invalid_home_id")
 
 
+class TestOverlayPayload(unittest.IsolatedAsyncioTestCase):
+    """Test set_zone_overlay payload generation complies with Tado API."""
+
+    async def test_overlay_next_time_block(self):
+        client = TadoClient("test_token")
+        client._request = AsyncMock(return_value={})
+
+        await client.set_zone_overlay(
+            home_id=631338,
+            zone_id=36,
+            target_temp=21.0,
+            power="ON",
+            termination_type="NEXT_TIME_BLOCK",
+        )
+
+        client._request.assert_called_once()
+        method, endpoint = client._request.call_args[0]
+        payload = client._request.call_args[1]["json_data"]
+
+        self.assertEqual(method, "PUT")
+        self.assertEqual(endpoint, "/homes/631338/zones/36/overlay")
+        self.assertEqual(payload["setting"]["power"], "ON")
+        self.assertEqual(payload["setting"]["temperature"]["celsius"], 21.0)
+        self.assertEqual(payload["termination"]["typeSkillBasedApp"], "NEXT_TIME_BLOCK")
+        self.assertNotIn("type", payload["termination"])
+
+    async def test_overlay_manual(self):
+        client = TadoClient("test_token")
+        client._request = AsyncMock(return_value={})
+
+        await client.set_zone_overlay(
+            home_id=631338,
+            zone_id=36,
+            power="OFF",
+            termination_type="MANUAL",
+        )
+
+        payload = client._request.call_args[1]["json_data"]
+        self.assertEqual(payload["setting"]["power"], "OFF")
+        self.assertEqual(payload["termination"]["typeSkillBasedApp"], "MANUAL")
+        self.assertNotIn("temperature", payload["setting"])
+
+    async def test_overlay_timer(self):
+        client = TadoClient("test_token")
+        client._request = AsyncMock(return_value={})
+
+        await client.set_zone_overlay(
+            home_id=631338,
+            zone_id=36,
+            target_temp=23.5,
+            power="ON",
+            termination_type="TIMER",
+            duration_seconds=1800,
+        )
+
+        payload = client._request.call_args[1]["json_data"]
+        self.assertEqual(payload["termination"]["typeSkillBasedApp"], "TIMER")
+        self.assertEqual(payload["termination"]["durationInSeconds"], 1800)
+
+
 if __name__ == "__main__":
     unittest.main()
