@@ -49,7 +49,10 @@
       "init": {
         "title": "Paramètres DomoLink-Tado",
         "data": {
+          "external_sensors_trigger": "🌡️ Configurer les capteurs externes de température & humidité par pièce",
           "reauth_trigger": "🔑 Lancer une ré-authentification Tado (nouveau jeton)",
+          "auto_offset_calibration": "Auto-calibrage physique des têtes thermostatiques par capteur externe (anti-battement 0.5°C, 30 min cooldown)",
+          "show_quota_sensors": "Activer les capteurs de quota API Tado (sensor.tado_api_quota_*)",
           "overlay_mode": "Règle de fin de consigne manuelle par défaut",
           "overlay_duration": "Durée de la minuterie manuelle (secondes)",
           "auto_window_enabled": "Détection fenêtre ouverte : coupure automatique du radiateur",
@@ -66,6 +69,10 @@
           "smart_boost_temp": "Température du Boost Intelligent (°C)",
           "smart_boost_duration": "Durée du Boost Intelligent (secondes)"
         }
+      },
+      "external_sensors": {
+        "title": "Capteurs externes par pièce",
+        "description": "Indiquez les identifiants d'entités Home Assistant (ex: sensor.salon_temperature, sensor.salon_humidity) pour remplacer les mesures Tado et ajuster automatiquement vos vannes."
       },
       "reauth_device": {
         "title": "Renouvellement du jeton Tado",

@@ -17,6 +17,7 @@ from .const import (
     CONF_ACCESS_TOKEN,
     CONF_ADAPTIVE_POLLING,
     CONF_AUTO_GEOFENCING_ENABLED,
+    CONF_AUTO_OFFSET_CALIBRATION,
     CONF_AUTO_WINDOW_DURATION,
     CONF_AUTO_WINDOW_ENABLED,
     CONF_DYNAMIC_WINDOW_DROP,
@@ -33,10 +34,14 @@ from .const import (
     CONF_PREHEAT_MODE,
     CONF_REFRESH_TOKEN,
     CONF_ROOM_LABELS,
+    CONF_SHOW_QUOTA_SENSORS,
     CONF_SMART_BOOST_DURATION,
     CONF_SMART_BOOST_TEMP,
+    CONF_ZONE_HUMIDITY_ENTITIES,
+    CONF_ZONE_TEMP_ENTITIES,
     DEFAULT_ADAPTIVE_POLLING,
     DEFAULT_AUTO_GEOFENCING_ENABLED,
+    DEFAULT_AUTO_OFFSET_CALIBRATION,
     DEFAULT_AUTO_WINDOW_DURATION,
     DEFAULT_AUTO_WINDOW_ENABLED,
     DEFAULT_DYNAMIC_WINDOW_DROP,
@@ -47,6 +52,7 @@ from .const import (
     DEFAULT_PREHEAT_ENABLED,
     DEFAULT_PREHEAT_MAX_DURATION,
     DEFAULT_PREHEAT_MODE,
+    DEFAULT_SHOW_QUOTA_SENSORS,
     DEFAULT_SMART_BOOST_DURATION,
     DEFAULT_SMART_BOOST_TEMP,
     DOMAIN,
@@ -449,10 +455,16 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             if user_input.get("reauth_trigger"):
                 return await self.async_step_reauth_device()
+            if user_input.get("external_sensors_trigger"):
+                return await self.async_step_external_sensors()
 
             # Preserve existing options (e.g. labels if not in this form)
             current_options = dict(self.config_entry.options)
-            clean_input = {k: v for k, v in user_input.items() if k != "reauth_trigger"}
+            clean_input = {
+                k: v
+                for k, v in user_input.items()
+                if k not in ("reauth_trigger", "external_sensors_trigger")
+            }
             current_options.update(clean_input)
             return self.async_create_entry(title="", data=current_options)
 
@@ -460,7 +472,20 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
             step_id="init",
             data_schema=vol.Schema(
                 {
+                    vol.Optional("external_sensors_trigger", default=False): bool,
                     vol.Optional("reauth_trigger", default=False): bool,
+                    vol.Optional(
+                        CONF_AUTO_OFFSET_CALIBRATION,
+                        default=self.config_entry.options.get(
+                            CONF_AUTO_OFFSET_CALIBRATION, DEFAULT_AUTO_OFFSET_CALIBRATION
+                        ),
+                    ): bool,
+                    vol.Optional(
+                        CONF_SHOW_QUOTA_SENSORS,
+                        default=self.config_entry.options.get(
+                            CONF_SHOW_QUOTA_SENSORS, DEFAULT_SHOW_QUOTA_SENSORS
+                        ),
+                    ): bool,
                     vol.Optional(
                         CONF_OVERLAY_MODE,
                         default=self.config_entry.options.get(CONF_OVERLAY_MODE, DEFAULT_OVERLAY_MODE),
@@ -622,3 +647,63 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
             data_schema=vol.Schema({}),
             errors=errors,
         )
+
+    async def async_step_external_sensors(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Configure external temperature and humidity sensors per room."""
+        coordinator = None
+        if DOMAIN in self.hass.data and self.config_entry.entry_id in self.hass.data[DOMAIN]:
+            coordinator = self.hass.data[DOMAIN][self.config_entry.entry_id].get("coordinator")
+
+        zones = coordinator.data.get("zones", {}) if (coordinator and coordinator.data) else {}
+        cur_temp_map = dict(self.config_entry.options.get(CONF_ZONE_TEMP_ENTITIES, {}))
+        cur_hum_map = dict(self.config_entry.options.get(CONF_ZONE_HUMIDITY_ENTITIES, {}))
+
+        if user_input is not None:
+            new_temp_map = dict(cur_temp_map)
+            new_hum_map = dict(cur_hum_map)
+            for zid in zones:
+                t_val = str(user_input.get(f"temp_zone_{zid}", "")).strip()
+                if t_val:
+                    new_temp_map[str(zid)] = t_val
+                elif str(zid) in new_temp_map:
+                    del new_temp_map[str(zid)]
+
+                h_val = str(user_input.get(f"hum_zone_{zid}", "")).strip()
+                if h_val:
+                    new_hum_map[str(zid)] = h_val
+                elif str(zid) in new_hum_map:
+                    del new_hum_map[str(zid)]
+
+            updated_options = dict(self.config_entry.options)
+            updated_options[CONF_ZONE_TEMP_ENTITIES] = new_temp_map
+            updated_options[CONF_ZONE_HUMIDITY_ENTITIES] = new_hum_map
+            return self.async_create_entry(title="", data=updated_options)
+
+        schema_dict: dict[Any, Any] = {}
+        for zid, zd in zones.items():
+            zname = zd.get("name", f"Zone {zid}")
+            schema_dict[
+                vol.Optional(
+                    f"temp_zone_{zid}",
+                    default=cur_temp_map.get(str(zid), ""),
+                    description={"suggested_value": cur_temp_map.get(str(zid), "")},
+                )
+            ] = str
+            schema_dict[
+                vol.Optional(
+                    f"hum_zone_{zid}",
+                    default=cur_hum_map.get(str(zid), ""),
+                    description={"suggested_value": cur_hum_map.get(str(zid), "")},
+                )
+            ] = str
+
+        if not schema_dict:
+            schema_dict[vol.Optional("info", default="Aucune pièce détectée")] = str
+
+        return self.async_show_form(
+            step_id="external_sensors",
+            data_schema=vol.Schema(schema_dict),
+        )
+

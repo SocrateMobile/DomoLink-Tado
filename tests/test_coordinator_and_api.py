@@ -46,9 +46,39 @@ if "homeassistant" not in sys.modules:
     ha_const.Platform = Platform
     ha_const.PERCENTAGE = "%"
     ha_const.ATTR_TEMPERATURE = "temperature"
+    ha_const.PRECISION_HALVES = 0.5
+    ha_const.PRECISION_TENTHS = 0.1
     class UnitOfTemperature:
         CELSIUS = "°C"
     ha_const.UnitOfTemperature = UnitOfTemperature
+
+    ha_climate = make_pkg("homeassistant.components.climate")
+    class ClimateEntity: pass
+    class ClimateEntityFeature:
+        TARGET_TEMPERATURE = 1
+        TURN_ON = 2
+        TURN_OFF = 4
+        FAN_MODE = 8
+        SWING_MODE = 16
+    class HVACMode:
+        OFF = "off"
+        HEAT = "heat"
+        COOL = "cool"
+        HEAT_COOL = "heat_cool"
+        AUTO = "auto"
+        DRY = "dry"
+        FAN_ONLY = "fan_only"
+    class HVACAction:
+        OFF = "off"
+        HEATING = "heating"
+        COOLING = "cooling"
+        DRYING = "drying"
+        IDLE = "idle"
+        FAN = "fan"
+    ha_climate.ClimateEntity = ClimateEntity
+    ha_climate.ClimateEntityFeature = ClimateEntityFeature
+    ha_climate.HVACMode = HVACMode
+    ha_climate.HVACAction = HVACAction
 
     ha_btn = make_pkg("homeassistant.components.button")
     class ButtonEntity: pass
@@ -103,7 +133,10 @@ if "homeassistant" not in sys.modules:
 
     ha_entries = make_pkg("homeassistant.config_entries")
     class ConfigEntry: pass
-    class OptionsFlow: pass
+    class OptionsFlow:
+        def async_create_entry(self, **kwargs): return {"type": "create_entry", **kwargs}
+        def async_show_form(self, **kwargs): return {"type": "form", **kwargs}
+        def async_abort(self, **kwargs): return {"type": "abort", **kwargs}
     class ConfigFlow:
         def __init_subclass__(cls, domain=None, **kwargs):
             pass
@@ -190,7 +223,26 @@ from custom_components.domolink_tado.sensor import (
     DomolinkTadoOutdoorHumiditySensor,
     DomolinkTadoZonePreheatAdvisorSensor,
     DomolinkTadoZoneHeatingRateSensor,
+    DomolinkTadoQuotaRemainingSensor,
+    DomolinkTadoQuotaLimitSensor,
+    DomolinkTadoZoneTempSensor,
+    DomolinkTadoZoneHumiditySensor,
 )
+from custom_components.domolink_tado.climate import (
+    DomolinkTadoClimate,
+    async_setup_entry as async_setup_climate_entry,
+)
+from custom_components.domolink_tado.config_flow import (
+    DomolinkTadoConfigFlow,
+    DomolinkTadoOptionsFlow,
+)
+from custom_components.domolink_tado.const import (
+    CONF_AUTO_OFFSET_CALIBRATION,
+    CONF_SHOW_QUOTA_SENSORS,
+    CONF_ZONE_HUMIDITY_ENTITIES,
+    CONF_ZONE_TEMP_ENTITIES,
+)
+from homeassistant.components.climate import HVACAction, HVACMode
 from custom_components.domolink_tado.binary_sensor import (
     DomolinkTadoZoneMoldRiskProblemBinarySensor,
     DomolinkTadoZoneVentilationRecommendedBinarySensor,
@@ -1118,3 +1170,432 @@ class TestWaterHeaterEntity(unittest.IsolatedAsyncioTestCase):
         # Seule la zone HOT_WATER doit être ajoutée (pas la zone HEATING)
         self.assertEqual(len(added_entities), 1)
         self.assertIsInstance(added_entities[0], DomolinkTadoWaterHeater)
+
+
+class TestRateLimitHeaderParsing(unittest.IsolatedAsyncioTestCase):
+    """Unit tests for RFC RateLimit sniffing in TadoClient."""
+
+    def setUp(self):
+        self.client = TadoClient(session=MagicMock(), access_token="mock_token")
+
+    def test_parse_ratelimit_standard_headers(self):
+        headers = {
+            "RateLimit": "r=42",
+            "RateLimit-Policy": "q=100;w=86400",
+            "RateLimit-Reset": "1200",
+        }
+        self.client._parse_ratelimit_headers(headers)
+        self.assertEqual(self.client.rate_limit_limit, 100)
+        self.assertEqual(self.client.rate_limit_remaining, 42)
+        self.assertEqual(self.client.rate_limit_reset_seconds, 1200)
+
+        info = self.client.rate_limit_info
+        self.assertEqual(info["limit"], 100)
+        self.assertEqual(info["remaining"], 42)
+        self.assertEqual(info["reset_seconds"], 1200)
+        self.assertIsNotNone(info["last_update"])
+
+    def test_parse_ratelimit_lowercase_headers(self):
+        headers = {
+            "ratelimit": "r=15",
+            "ratelimit-policy": "q=200",
+        }
+        self.client._parse_ratelimit_headers(headers)
+        self.assertEqual(self.client.rate_limit_limit, 200)
+        self.assertEqual(self.client.rate_limit_remaining, 15)
+
+    def test_parse_x_ratelimit_legacy_headers(self):
+        headers = {
+            "X-RateLimit-Limit": "100",
+            "X-RateLimit-Remaining": "88",
+            "X-RateLimit-Reset": "600",
+        }
+        self.client._parse_ratelimit_headers(headers)
+        self.assertEqual(self.client.rate_limit_limit, 100)
+        self.assertEqual(self.client.rate_limit_remaining, 88)
+        self.assertEqual(self.client.rate_limit_reset_seconds, 600)
+
+    async def test_set_zone_overlay_with_ac_parameters(self):
+        self.client._request = AsyncMock(return_value={"setting": {"power": "ON"}})
+        await self.client.set_zone_overlay(
+            home_id=631338,
+            zone_id=5,
+            target_temp=22.0,
+            power="ON",
+            termination_type="MANUAL",
+            zone_type="AIR_CONDITIONING",
+            mode="COOL",
+            fan_speed="HIGH",
+            swing="ON",
+        )
+        self.client._request.assert_called_once()
+        call_args = self.client._request.call_args
+        self.assertEqual(call_args[0][0], "PUT")
+        self.assertEqual(call_args[0][1], "/homes/631338/zones/5/overlay")
+        json_data = call_args[1]["json_data"]
+        self.assertEqual(json_data["setting"]["type"], "AIR_CONDITIONING")
+        self.assertEqual(json_data["setting"]["mode"], "COOL")
+        self.assertEqual(json_data["setting"]["fanSpeed"], "HIGH")
+        self.assertEqual(json_data["setting"]["swing"], "ON")
+        self.assertEqual(json_data["setting"]["temperature"]["celsius"], 22.0)
+
+
+class TestQuotaSensors(unittest.TestCase):
+    """Unit tests for Tado API Quota sensors."""
+
+    def setUp(self):
+        self.coordinator = MagicMock()
+        self.coordinator.home_id = 631338
+        self.coordinator.home_name = "Maison Test"
+        self.coordinator.data = {
+            "rate_limit": {
+                "limit": 100,
+                "remaining": 42,
+                "reset_seconds": 3600,
+                "last_update": "2026-09-17T22:00:00",
+            }
+        }
+
+    def test_quota_remaining_sensor(self):
+        sensor = DomolinkTadoQuotaRemainingSensor(self.coordinator)
+        self.assertEqual(sensor.unique_id, "domolink_tado_631338_quota_remaining")
+        self.assertEqual(sensor.native_value, 42)
+        attrs = sensor.extra_state_attributes
+        self.assertEqual(attrs["quota_limit"], 100)
+        self.assertEqual(attrs["reset_seconds"], 3600)
+        self.assertEqual(attrs["last_update"], "2026-09-17T22:00:00")
+
+    def test_quota_limit_sensor(self):
+        sensor = DomolinkTadoQuotaLimitSensor(self.coordinator)
+        self.assertEqual(sensor.unique_id, "domolink_tado_631338_quota_limit")
+        self.assertEqual(sensor.native_value, 100)
+
+
+class TestExternalSensorsAndAutoCalibration(unittest.IsolatedAsyncioTestCase):
+    """Unit tests for external sensor override and auto-offset calibration engine."""
+
+    def setUp(self):
+        self.hass = MagicMock()
+        self.entry = MagicMock()
+        self.entry.entry_id = "test_entry"
+        self.entry.options = {
+            CONF_ZONE_TEMP_ENTITIES: {"1": "sensor.salon_external_temp"},
+            CONF_ZONE_HUMIDITY_ENTITIES: {"1": "sensor.salon_external_hum"},
+            CONF_AUTO_OFFSET_CALIBRATION: True,
+        }
+        self.client = MagicMock()
+        self.coordinator = DomolinkTadoCoordinator(
+            self.hass, self.entry, self.client, 631338, "Maison Test"
+        )
+        self.coordinator.data = {
+            "zones": {
+                1: {
+                    "zone_id": 1,
+                    "name": "Salon",
+                    "type": "HEATING",
+                    "inside_temperature": 20.0,
+                    "raw_inside_temperature": 23.0,
+                    "humidity": 55.0,
+                    "raw_humidity": 40.0,
+                    "is_external_temp": True,
+                    "is_external_humidity": True,
+                    "devices": [{"serialNo": "VA0123", "currentMountedOffset": {"celsius": 0.0}}],
+                }
+            }
+        }
+
+    def test_zone_temp_sensor_attributes_with_external_sensor(self):
+        temp_sensor = DomolinkTadoZoneTempSensor(self.coordinator, 1)
+        self.assertEqual(temp_sensor.native_value, 20.0)
+        attrs = temp_sensor.extra_state_attributes
+        self.assertEqual(attrs["source"], "external_sensor")
+        self.assertEqual(attrs["raw_tado_temperature"], 23.0)
+
+        hum_sensor = DomolinkTadoZoneHumiditySensor(self.coordinator, 1)
+        self.assertEqual(hum_sensor.native_value, 55.0)
+        h_attrs = hum_sensor.extra_state_attributes
+        self.assertEqual(h_attrs["source"], "external_sensor")
+        self.assertEqual(h_attrs["raw_tado_humidity"], 40.0)
+
+    def test_zone_temp_sensor_attributes_native_tado(self):
+        self.coordinator.data["zones"][1]["is_external_temp"] = False
+        self.coordinator.data["zones"][1]["is_external_humidity"] = False
+        temp_sensor = DomolinkTadoZoneTempSensor(self.coordinator, 1)
+        self.assertEqual(temp_sensor.extra_state_attributes["source"], "tado_sensor")
+        hum_sensor = DomolinkTadoZoneHumiditySensor(self.coordinator, 1)
+        self.assertEqual(hum_sensor.extra_state_attributes["source"], "tado_sensor")
+
+    async def test_auto_offset_calibration_triggered_and_cooldown(self):
+        # Mocking Tado API discovery and zone state
+        now_time = 100000.0
+        self.coordinator.client.get_zones = AsyncMock(
+            return_value=[
+                {
+                    "id": 1,
+                    "name": "Salon",
+                    "type": "HEATING",
+                    "devices": [{"serialNo": "VA0123"}],
+                }
+            ]
+        )
+        self.coordinator.client.get_devices = AsyncMock(
+            return_value=[
+                {
+                    "serialNo": "VA0123",
+                    "deviceType": "VA01",
+                    "currentMountedOffset": {"celsius": 0.0},
+                }
+            ]
+        )
+        self.coordinator.client.get_zone_states = AsyncMock(
+            return_value={
+                "zoneStates": {
+                    "1": {
+                        "sensorDataPoints": {
+                            "insideTemperature": {"celsius": 23.0},
+                            "humidity": {"percentage": 40.0},
+                        },
+                        "setting": {"power": "ON", "temperature": {"celsius": 21.0}},
+                    }
+                }
+            }
+        )
+        self.coordinator.client.get_weather = AsyncMock(return_value={})
+        self.coordinator.client.get_home_state = AsyncMock(return_value={"presence": "HOME"})
+        self.coordinator.async_set_temperature_offset = AsyncMock()
+
+        # HA state mock: external temp is 20.0°C (difference is 20.0 - 23.0 = -3.0°C)
+        ext_st = MagicMock()
+        ext_st.state = "20.0"
+        self.hass.states.get = MagicMock(return_value=ext_st)
+
+        created_tasks = []
+        def _mock_create_task(coro):
+            created_tasks.append(coro)
+            return MagicMock()
+
+        self.coordinator.hass.async_create_task = MagicMock(side_effect=_mock_create_task)
+
+        with patch("time.time", return_value=now_time):
+            data = await self.coordinator._async_update_data()
+
+        # Check injected values
+        self.assertEqual(data["zones"][1]["inside_temperature"], 20.0)
+        self.assertEqual(data["zones"][1]["raw_inside_temperature"], 23.0)
+        self.assertTrue(data["zones"][1]["is_external_temp"])
+
+        # Offset change is -3.0°C (>= 0.5°C threshold) -> async_set_temperature_offset must be triggered
+        self.assertEqual(len(created_tasks), 1)
+        self.assertEqual(self.coordinator._last_offset_update_time["VA0123"], now_time)
+        for c in created_tasks:
+            await c
+
+        # Immediate next call (100 seconds later < 1800s cooldown)
+        self.coordinator.hass.async_create_task.reset_mock()
+        created_tasks.clear()
+        with patch("time.time", return_value=now_time + 100):
+            await self.coordinator._async_update_data()
+        # Should NOT be called because of cooldown
+        self.assertEqual(len(created_tasks), 0)
+
+    async def test_auto_offset_anti_chatter_deadband(self):
+        # When delta is only 0.2°C (< 0.5°C deadband)
+        now_time = 200000.0
+        self.coordinator._zones_raw = [
+            {"id": 1, "name": "Salon", "type": "HEATING", "devices": [{"serialNo": "VA0123"}]}
+        ]
+        self.coordinator._devices_raw = [
+            {"serialNo": "VA0123", "currentMountedOffset": {"celsius": 0.0}}
+        ]
+        self.coordinator._last_discovery_time = now_time
+        self.coordinator.client.get_zone_states = AsyncMock(
+            return_value={
+                "zoneStates": {
+                    "1": {
+                        "sensorDataPoints": {"insideTemperature": {"celsius": 20.0}},
+                        "setting": {"power": "ON"},
+                    }
+                }
+            }
+        )
+        self.coordinator.client.get_weather = AsyncMock(return_value={})
+        self.coordinator.client.get_home_state = AsyncMock(return_value={})
+
+        ext_st = MagicMock()
+        ext_st.state = "20.2"  # Diff is only 0.2°C (< 0.5°C)
+        self.hass.states.get = MagicMock(return_value=ext_st)
+        self.coordinator.hass.async_create_task = MagicMock()
+
+        with patch("time.time", return_value=now_time):
+            await self.coordinator._async_update_data()
+
+        # No offset task created
+        self.coordinator.hass.async_create_task.assert_not_called()
+
+
+class TestSmartACClimate(unittest.IsolatedAsyncioTestCase):
+    """Unit tests for Smart AC Control Climate platform."""
+
+    def setUp(self):
+        self.coordinator = MagicMock()
+        self.coordinator.home_id = 631338
+        self.coordinator.home_name = "Maison Test"
+        self.coordinator.get_zone_labels = MagicMock(return_value=["Salon"])
+        self.coordinator.async_set_ac_mode = AsyncMock()
+        self.coordinator.async_set_temperature = AsyncMock()
+        self.coordinator.async_resume_schedule = AsyncMock()
+        self.coordinator.async_set_zone_off = AsyncMock()
+        self.coordinator.data = {
+            "zones": {
+                2: {
+                    "zone_id": 2,
+                    "name": "Clim Salon",
+                    "type": "AIR_CONDITIONING",
+                    "inside_temperature": 24.5,
+                    "target_temperature": 22.0,
+                    "power": "ON",
+                    "ac_mode": "COOL",
+                    "fan_speed": "HIGH",
+                    "swing": "ON",
+                    "is_overlay_active": True,
+                    "devices": [
+                        {
+                            "serialNo": "AC12345",
+                            "deviceType": "Smart AC Control",
+                            "batteryState": "NORMAL",
+                        }
+                    ],
+                }
+            }
+        }
+        self.entry = MagicMock()
+        self.entry.options = {}
+
+    def test_ac_climate_properties(self):
+        climate = DomolinkTadoClimate(self.coordinator, self.entry, 2)
+        self.assertTrue(climate.is_ac)
+        self.assertEqual(climate.icon, "mdi:air-conditioner")
+        self.assertEqual(climate.hvac_mode, HVACMode.COOL)
+        self.assertEqual(climate.hvac_action, HVACAction.COOLING)
+        self.assertEqual(climate.fan_mode, "high")
+        self.assertEqual(climate.swing_mode, "on")
+        self.assertIn(HVACMode.COOL, climate.hvac_modes)
+        self.assertIn(HVACMode.DRY, climate.hvac_modes)
+        self.assertIn(HVACMode.FAN_ONLY, climate.hvac_modes)
+        self.assertEqual(climate.fan_modes, ["auto", "quiet", "low", "middle", "high"])
+        self.assertEqual(climate.swing_modes, ["off", "on"])
+
+    async def test_ac_climate_actions(self):
+        climate = DomolinkTadoClimate(self.coordinator, self.entry, 2)
+
+        # Set HVAC mode
+        await climate.async_set_hvac_mode(HVACMode.HEAT)
+        self.coordinator.async_set_ac_mode.assert_called_with(
+            zone_id=2,
+            mode="HEAT",
+            target_temp=22.0,
+            fan_speed="HIGH",
+            swing="ON",
+            termination_type="NEXT_TIME_BLOCK",
+            duration_seconds=3600,
+        )
+
+        # Set Fan mode
+        await climate.async_set_fan_mode("low")
+        self.coordinator.async_set_ac_mode.assert_called_with(
+            zone_id=2,
+            mode="COOL",
+            target_temp=22.0,
+            fan_speed="LOW",
+            swing="ON",
+            termination_type="NEXT_TIME_BLOCK",
+            duration_seconds=3600,
+        )
+
+        # Set Swing mode
+        await climate.async_set_swing_mode("off")
+        self.coordinator.async_set_ac_mode.assert_called_with(
+            zone_id=2,
+            mode="COOL",
+            target_temp=22.0,
+            fan_speed="HIGH",
+            swing="OFF",
+            termination_type="NEXT_TIME_BLOCK",
+            duration_seconds=3600,
+        )
+
+        # Set Temperature
+        await climate.async_set_temperature(temperature=21.5)
+        self.coordinator.async_set_ac_mode.assert_called_with(
+            zone_id=2,
+            mode="COOL",
+            target_temp=21.5,
+            fan_speed="HIGH",
+            swing="ON",
+            termination_type="NEXT_TIME_BLOCK",
+            duration_seconds=3600,
+        )
+
+    async def test_ac_setup_climate_entry(self):
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        self.coordinator.data["zones"][1] = {
+            "zone_id": 1,
+            "name": "Chambre",
+            "type": "HEATING",
+        }
+        hass.data = {"domolink_tado": {"test_entry": {"coordinator": self.coordinator}}}
+
+        added = []
+        await async_setup_climate_entry(hass, entry, lambda ents: added.extend(ents))
+        self.assertEqual(len(added), 2)  # 1 HEATING + 1 AC
+        ac_ent = [e for e in added if e.is_ac][0]
+        self.assertEqual(ac_ent.zone_id, 2)
+
+
+class TestOptionsFlowExternalSensors(unittest.IsolatedAsyncioTestCase):
+    """Unit tests for OptionsFlow external sensor configuration."""
+
+    def setUp(self):
+        self.entry = MagicMock()
+        self.entry.entry_id = "test_entry"
+        self.entry.options = {
+            CONF_ZONE_TEMP_ENTITIES: {"1": "sensor.old_temp"},
+            CONF_ZONE_HUMIDITY_ENTITIES: {"1": "sensor.old_hum"},
+        }
+        self.flow = DomolinkTadoOptionsFlow(self.entry)
+        self.flow.hass = MagicMock()
+        coord = MagicMock()
+        coord.data = {
+            "zones": {
+                1: {"name": "Salon"},
+                2: {"name": "Chambre"},
+            }
+        }
+        self.flow.hass.data = {"domolink_tado": {"test_entry": {"coordinator": coord}}}
+
+    async def test_options_flow_init_triggers_external_sensors(self):
+        result = await self.flow.async_step_init({"external_sensors_trigger": True})
+        self.assertEqual(result["type"], "form")
+        self.assertEqual(result["step_id"], "external_sensors")
+
+    async def test_options_flow_external_sensors_submit(self):
+        user_input = {
+            "temp_zone_1": "sensor.salon_temp",
+            "hum_zone_1": "sensor.salon_hum",
+            "temp_zone_2": "sensor.chambre_temp",
+            "hum_zone_2": "",
+        }
+        result = await self.flow.async_step_external_sensors(user_input)
+        self.assertEqual(result["type"], "create_entry")
+        options = result["data"]
+        self.assertEqual(
+            options[CONF_ZONE_TEMP_ENTITIES],
+            {"1": "sensor.salon_temp", "2": "sensor.chambre_temp"},
+        )
+        self.assertEqual(
+            options[CONF_ZONE_HUMIDITY_ENTITIES],
+            {"1": "sensor.salon_hum"},
+        )
+

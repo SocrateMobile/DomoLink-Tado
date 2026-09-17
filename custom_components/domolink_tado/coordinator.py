@@ -17,6 +17,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import (
     CONF_ADAPTIVE_POLLING,
     CONF_AUTO_GEOFENCING_ENABLED,
+    CONF_AUTO_OFFSET_CALIBRATION,
     CONF_AUTO_WINDOW_DURATION,
     CONF_AUTO_WINDOW_ENABLED,
     CONF_DYNAMIC_WINDOW_DROP,
@@ -33,7 +34,10 @@ from .const import (
     CONF_ROOM_LABELS,
     CONF_SMART_BOOST_DURATION,
     CONF_SMART_BOOST_TEMP,
+    CONF_ZONE_HUMIDITY_ENTITIES,
+    CONF_ZONE_TEMP_ENTITIES,
     DEFAULT_AUTO_GEOFENCING_ENABLED,
+    DEFAULT_AUTO_OFFSET_CALIBRATION,
     DEFAULT_AUTO_WINDOW_DURATION,
     DEFAULT_AUTO_WINDOW_ENABLED,
     DEFAULT_DYNAMIC_WINDOW_DROP,
@@ -47,6 +51,8 @@ from .const import (
     DEFAULT_SMART_BOOST_DURATION,
     DEFAULT_SMART_BOOST_TEMP,
     DOMAIN,
+    OFFSET_MIN_STEP,
+    OFFSET_UPDATE_COOLDOWN,
     OVERLAY_MANUAL,
     OVERLAY_NEXT_TIME_BLOCK,
     OVERLAY_TIMER,
@@ -107,6 +113,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._zone_schedules_raw: dict[int, list[dict[str, Any]]] = {}
         self._last_schedule_fetch_time: dict[int, float] = {}
         self._preheat_triggered: dict[int, bool] = {}
+        self._last_offset_update_time: dict[str, float] = {}
 
     def get_zone_labels(self, zone_id: int | str) -> list[str]:
         """Return configured labels for a given zone ID."""
@@ -259,6 +266,75 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     else None
                 )
 
+                raw_inside_temp = inside_temp
+                raw_humidity = humidity
+                is_external_temp = False
+                is_external_hum = False
+
+                temp_entities = self.entry.options.get(CONF_ZONE_TEMP_ENTITIES, {})
+                hum_entities = self.entry.options.get(CONF_ZONE_HUMIDITY_ENTITIES, {})
+                auto_offset_calib = self.entry.options.get(
+                    CONF_AUTO_OFFSET_CALIBRATION, DEFAULT_AUTO_OFFSET_CALIBRATION
+                )
+
+                # Remplacement par capteur de température externe Home Assistant (Priorité Confort)
+                ext_temp_ent = temp_entities.get(str(zid))
+                if ext_temp_ent and getattr(self.hass, "states", None):
+                    st = self.hass.states.get(ext_temp_ent)
+                    if st and st.state not in ("unavailable", "unknown"):
+                        try:
+                            inside_temp = float(st.state)
+                            is_external_temp = True
+                        except (ValueError, TypeError):
+                            pass
+
+                # Remplacement par capteur d'humidité externe Home Assistant
+                ext_hum_ent = hum_entities.get(str(zid))
+                if ext_hum_ent and getattr(self.hass, "states", None):
+                    st = self.hass.states.get(ext_hum_ent)
+                    if st and st.state not in ("unavailable", "unknown"):
+                        try:
+                            humidity = float(st.state)
+                            is_external_hum = True
+                        except (ValueError, TypeError):
+                            pass
+
+                # Auto-calibrage physique des têtes thermostatiques par capteur externe (anti-battement 0.5°C & cooldown 30min)
+                if (
+                    auto_offset_calib
+                    and is_external_temp
+                    and raw_inside_temp is not None
+                    and inside_temp is not None
+                ):
+                    temp_diff = float(inside_temp) - float(raw_inside_temp)
+                    for d in enhanced_devices:
+                        serial = d.get("serialNo")
+                        if not serial:
+                            continue
+
+                        curr_offset = 0.0
+                        if "currentMountedOffset" in d and isinstance(d["currentMountedOffset"], dict):
+                            curr_offset = float(d["currentMountedOffset"].get("celsius", 0.0))
+                        elif "characteristics" in d and isinstance(d["characteristics"], dict):
+                            curr_offset = float(d["characteristics"].get("temperatureOffset", {}).get("celsius", 0.0))
+
+                        new_offset = round(max(-5.0, min(5.0, curr_offset + temp_diff)), 1)
+                        if abs(new_offset - curr_offset) >= OFFSET_MIN_STEP:
+                            last_calib = self._last_offset_update_time.get(serial, 0.0)
+                            if now - last_calib >= OFFSET_UPDATE_COOLDOWN:
+                                self._last_offset_update_time[serial] = now
+                                _LOGGER.info(
+                                    "DomoLink-Tado: Auto-calibrage offset physique %s (zone %s) : actuel=%.1f°C -> nouveau=%.1f°C (diff=%.1f°C)",
+                                    serial,
+                                    zid,
+                                    curr_offset,
+                                    new_offset,
+                                    temp_diff,
+                                )
+                                self.hass.async_create_task(
+                                    self.async_set_temperature_offset(serial, new_offset)
+                                )
+
                 # Extract target setting & overlay
                 setting = z_state.get("setting", {})
                 overlay = z_state.get("overlay")
@@ -268,6 +344,9 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     else None
                 )
                 power = setting.get("power", "OFF") if setting else "OFF"
+                ac_mode = setting.get("mode") if setting else None
+                fan_speed = setting.get("fanSpeed") if setting else None
+                swing = setting.get("swing") if setting else None
 
                 # Open window detection native Tado
                 open_window = z_state.get("openWindow") is not None
@@ -417,10 +496,17 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "zone_id": zid,
                     "type": z.get("type", "HEATING"),
                     "inside_temperature": inside_temp,
+                    "raw_inside_temperature": raw_inside_temp,
                     "humidity": humidity,
+                    "raw_humidity": raw_humidity,
+                    "is_external_temp": is_external_temp,
+                    "is_external_humidity": is_external_hum,
                     "target_temperature": target_temp,
                     "power": power,
                     "heating_power": heating_power,
+                    "ac_mode": ac_mode,
+                    "fan_speed": fan_speed,
+                    "swing": swing,
                     "overlay": overlay,
                     "is_overlay_active": overlay is not None,
                     "open_window": open_window,
@@ -472,6 +558,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "presence": presence_val,
                 "active_heating_zones": active_heating_count,
                 "total_heating_power": total_heating_power,
+                "rate_limit": self.client.rate_limit_info,
                 "last_update": datetime.now().isoformat(),
             }
 
@@ -639,6 +726,49 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 power="ON",
                 termination_type=termination_type,
                 duration_seconds=duration_seconds,
+            ),
+        )
+
+    async def async_set_ac_mode(
+        self,
+        zone_id: int,
+        mode: str | None = None,
+        target_temp: float | None = None,
+        fan_speed: str | None = None,
+        swing: str | None = None,
+        power: str = "ON",
+        termination_type: str = OVERLAY_NEXT_TIME_BLOCK,
+        duration_seconds: int | None = None,
+    ) -> None:
+        """Set AC mode, fan speed, swing, and temperature with optimistic update."""
+        rounded_temp = round(float(target_temp), 1) if target_temp is not None else None
+        patch: dict[str, Any] = {
+            "power": power,
+            "is_overlay_active": True,
+        }
+        if mode is not None:
+            patch["ac_mode"] = mode.upper()
+        if rounded_temp is not None:
+            patch["target_temperature"] = rounded_temp
+        if fan_speed is not None:
+            patch["fan_speed"] = fan_speed.upper()
+        if swing is not None:
+            patch["swing"] = swing.upper()
+
+        await self._async_optimistic_zone_update(
+            zone_id,
+            patch,
+            self.client.set_zone_overlay(
+                home_id=self.home_id,
+                zone_id=zone_id,
+                target_temp=rounded_temp,
+                power=power,
+                termination_type=termination_type,
+                duration_seconds=duration_seconds,
+                zone_type="AIR_CONDITIONING",
+                mode=mode.upper() if mode else "COOL",
+                fan_speed=fan_speed.upper() if fan_speed else "AUTO",
+                swing=swing.upper() if swing else "OFF",
             ),
         )
 
