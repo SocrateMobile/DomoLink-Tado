@@ -5,7 +5,7 @@ from homeassistant.const import Platform
 
 DOMAIN = "domolink_tado"
 NAME = "DomoLink-Tado"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 
 # Endpoints API Tado
 TADO_AUTH_BASE = "https://login.tado.com/oauth2"
@@ -35,6 +35,10 @@ CONF_PREHEAT_ENABLED = "preheat_enabled"
 CONF_PREHEAT_MODE = "preheat_mode"
 CONF_PREHEAT_MAX_DURATION = "preheat_max_duration"
 CONF_DYNAMIC_WINDOW_DROP = "dynamic_window_drop"
+CONF_AUTO_GEOFENCING_ENABLED = "auto_geofencing_enabled"
+CONF_GEOFENCING_PERSONS = "geofencing_persons"
+CONF_SMART_BOOST_TEMP = "smart_boost_temp"
+CONF_SMART_BOOST_DURATION = "smart_boost_duration"
 
 # Modes de préchauffage
 PREHEAT_MODE_ADVISORY = "ADVISORY"
@@ -56,6 +60,10 @@ DEFAULT_PREHEAT_MODE = PREHEAT_MODE_ADVISORY
 DEFAULT_PREHEAT_MAX_DURATION = 90  # 90 minutes max par défaut
 DEFAULT_DYNAMIC_WINDOW_DROP = True
 DEFAULT_HEATING_RATE = 1.5  # 1.5 °C/heure par défaut pour un radiateur à eau chaude standard
+DEFAULT_AUTO_GEOFENCING_ENABLED = False
+DEFAULT_GEOFENCING_PERSONS = ""
+DEFAULT_SMART_BOOST_TEMP = 22.0
+DEFAULT_SMART_BOOST_DURATION = 1800  # 30 minutes
 
 # Températures limites
 MIN_TEMP = 5.0
@@ -68,6 +76,8 @@ PLATFORMS: list[Platform] = [
     Platform.SENSOR,
     Platform.BINARY_SENSOR,
     Platform.SWITCH,
+    Platform.BUTTON,
+    Platform.WATER_HEATER,
     Platform.UPDATE,
 ]
 

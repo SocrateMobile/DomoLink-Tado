@@ -41,11 +41,33 @@ if "homeassistant" not in sys.modules:
         BINARY_SENSOR = "binary_sensor"
         SWITCH = "switch"
         UPDATE = "update"
+        BUTTON = "button"
+        WATER_HEATER = "water_heater"
     ha_const.Platform = Platform
     ha_const.PERCENTAGE = "%"
+    ha_const.ATTR_TEMPERATURE = "temperature"
     class UnitOfTemperature:
         CELSIUS = "°C"
     ha_const.UnitOfTemperature = UnitOfTemperature
+
+    ha_btn = make_pkg("homeassistant.components.button")
+    class ButtonEntity: pass
+    ha_btn.ButtonEntity = ButtonEntity
+
+    ha_switch = make_pkg("homeassistant.components.switch")
+    class SwitchEntity: pass
+    ha_switch.SwitchEntity = SwitchEntity
+
+    ha_wh = make_pkg("homeassistant.components.water_heater")
+    class WaterHeaterEntity: pass
+    class WaterHeaterEntityFeature:
+        OPERATION_MODE = 1
+        TARGET_TEMPERATURE = 2
+    ha_wh.WaterHeaterEntity = WaterHeaterEntity
+    ha_wh.WaterHeaterEntityFeature = WaterHeaterEntityFeature
+    ha_wh.STATE_AUTO = "auto"
+    ha_wh.STATE_HEAT = "heat"
+    ha_wh.STATE_OFF = "off"
 
     ha_sensor = make_pkg("homeassistant.components.sensor")
     class SensorEntity: pass
@@ -130,6 +152,12 @@ if "homeassistant" not in sys.modules:
     class CoordinatorEntity:
         def __init__(self, coordinator, *args, **kwargs):
             self.coordinator = coordinator
+        @property
+        def unique_id(self):
+            return getattr(self, "_attr_unique_id", None)
+        @property
+        def name(self):
+            return getattr(self, "_attr_name", None)
         def __class_getitem__(cls, item):
             return cls
 
@@ -776,3 +804,317 @@ class TestPreheatSensorEntities(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from custom_components.domolink_tado.button import (
+    DomolinkTadoResumeAllSchedulesButton,
+    DomolinkTadoAllOffButton,
+    DomolinkTadoSmartBoostButton,
+    DomolinkTadoZoneResumeScheduleButton,
+    DomolinkTadoZoneBoostButton,
+    async_setup_entry as async_setup_button_entry,
+)
+from custom_components.domolink_tado.switch import (
+    DomolinkTadoGlobalEcoSwitch,
+)
+from custom_components.domolink_tado.water_heater import (
+    DomolinkTadoWaterHeater,
+    async_setup_entry as async_setup_water_heater_entry,
+)
+from custom_components.domolink_tado.const import (
+    CONF_AUTO_GEOFENCING_ENABLED,
+    CONF_GEOFENCING_PERSONS,
+    CONF_SMART_BOOST_TEMP,
+    CONF_SMART_BOOST_DURATION,
+    CONF_ECO_TEMP,
+)
+
+
+class TestGeofencingAndSmartBoost(unittest.IsolatedAsyncioTestCase):
+    """Tests pour le bridge de géofencing automatisé et le Smart Boost."""
+
+    def setUp(self):
+        self.hass = MagicMock()
+        self.entry = MagicMock()
+        self.entry.options = {
+            CONF_AUTO_GEOFENCING_ENABLED: True,
+            CONF_GEOFENCING_PERSONS: "person.alice, person.bob",
+            CONF_SMART_BOOST_TEMP: 23.5,
+            CONF_SMART_BOOST_DURATION: 1200,
+        }
+        self.client = MagicMock(spec=TadoClient)
+        self.coordinator = DomolinkTadoCoordinator(
+            self.hass, self.entry, self.client, 631338, "Maison Tado"
+        )
+        self.coordinator.data = {
+            "home_id": 631338,
+            "presence": "HOME",
+            "zones": {
+                1: {"name": "Salon", "is_overlay_active": False, "type": "HEATING"},
+                2: {"name": "Chambre", "is_overlay_active": False, "type": "HEATING"},
+            },
+        }
+
+    async def test_geofencing_disabled_noop(self):
+        self.entry.options[CONF_AUTO_GEOFENCING_ENABLED] = False
+        with patch.object(self.coordinator, "async_set_presence") as mock_set_pres:
+            self.coordinator._check_automated_geofencing("AWAY")
+            mock_set_pres.assert_not_called()
+
+    async def test_geofencing_all_persons_away(self):
+        # Alice et Bob sont absents
+        def get_state(entity_id):
+            mock_st = MagicMock()
+            mock_st.state = "not_home"
+            return mock_st
+
+        self.hass.states.get.side_effect = get_state
+
+        tasks = []
+        self.hass.async_create_task.side_effect = lambda coro: tasks.append(asyncio.create_task(coro))
+
+        with patch.object(self.coordinator, "async_set_presence", new_callable=AsyncMock) as mock_set_pres:
+            self.coordinator._check_automated_geofencing("HOME")
+            self.assertEqual(len(tasks), 1)
+            await asyncio.gather(*tasks)
+            mock_set_pres.assert_called_once_with(False)
+
+    async def test_geofencing_one_person_home(self):
+        # Alice est à la maison, Bob absent -> Présence = HOME
+        def get_state(entity_id):
+            mock_st = MagicMock()
+            mock_st.state = "home" if "alice" in entity_id else "not_home"
+            return mock_st
+
+        self.hass.states.get.side_effect = get_state
+
+        tasks = []
+        self.hass.async_create_task.side_effect = lambda coro: tasks.append(asyncio.create_task(coro))
+
+        with patch.object(self.coordinator, "async_set_presence", new_callable=AsyncMock) as mock_set_pres:
+            # Si actuellement AWAY sur Tado, on doit basculer HOME
+            self.coordinator._check_automated_geofencing("AWAY")
+            self.assertEqual(len(tasks), 1)
+            await asyncio.gather(*tasks)
+            mock_set_pres.assert_called_once_with(True)
+
+    async def test_geofencing_fallback_zone_home(self):
+        # Pas d'entités person configurées, fallback sur zone.home
+        self.entry.options[CONF_GEOFENCING_PERSONS] = ""
+        mock_zone = MagicMock()
+        mock_zone.state = "2"  # 2 personnes dans la zone
+        self.hass.states.get.return_value = mock_zone
+
+        tasks = []
+        self.hass.async_create_task.side_effect = lambda coro: tasks.append(asyncio.create_task(coro))
+
+        with patch.object(self.coordinator, "async_set_presence", new_callable=AsyncMock) as mock_set_pres:
+            self.coordinator._check_automated_geofencing("AWAY")
+            self.assertEqual(len(tasks), 1)
+            await asyncio.gather(*tasks)
+            mock_set_pres.assert_called_once_with(True)
+
+    async def test_set_presence_redundancy_filter(self):
+        # Si la présence Tado est déjà HOME et qu'on demande HOME, aucun appel API ne doit être émis
+        self.coordinator.data["presence"] = "HOME"
+        self.client.set_presence = AsyncMock()
+
+        await self.coordinator.async_set_presence(True)
+        self.client.set_presence.assert_not_called()
+
+        # Si on demande AWAY, l'appel doit être émis (avec home=False)
+        await self.coordinator.async_set_presence(False)
+        self.client.set_presence.assert_called_once_with(631338, False)
+
+    async def test_async_smart_boost(self):
+        with patch.object(self.coordinator, "_async_execute_all_zones", new_callable=AsyncMock) as mock_exec:
+            await self.coordinator.async_smart_boost()
+            mock_exec.assert_called_once()
+            self.assertIn("Smart Boost 23.5°C (1200s)", mock_exec.call_args[0][0])
+
+    async def test_async_set_zone_boost(self):
+        with patch.object(self.coordinator, "async_set_temperature", new_callable=AsyncMock) as mock_temp:
+            await self.coordinator.async_set_zone_boost(zone_id=1)
+            mock_temp.assert_called_once_with(
+                1,
+                target_temp=23.5,
+                termination_type="TIMER",
+                duration_seconds=1200,
+            )
+
+
+class TestButtonEntities(unittest.IsolatedAsyncioTestCase):
+    """Tests pour les entités de type Bouton."""
+
+    def setUp(self):
+        self.hass = MagicMock()
+        self.coordinator = MagicMock()
+        self.coordinator.home_id = 631338
+        self.coordinator.home_name = "Maison"
+        self.coordinator.data = {
+            "zones": {
+                1: {"name": "Salon"},
+                2: {"name": "Cuisine"},
+            }
+        }
+        self.coordinator.async_resume_all_schedules = AsyncMock()
+        self.coordinator.async_set_all_off = AsyncMock()
+        self.coordinator.async_smart_boost = AsyncMock()
+        self.coordinator.async_resume_schedule = AsyncMock()
+        self.coordinator.async_set_zone_boost = AsyncMock()
+
+    async def test_resume_all_schedules_button(self):
+        btn = DomolinkTadoResumeAllSchedulesButton(self.coordinator)
+        self.assertEqual(btn.unique_id, "domolink_tado_631338_resume_all_schedules")
+        await btn.async_press()
+        self.coordinator.async_resume_all_schedules.assert_called_once()
+
+    async def test_all_off_button(self):
+        btn = DomolinkTadoAllOffButton(self.coordinator)
+        self.assertEqual(btn.unique_id, "domolink_tado_631338_all_off")
+        await btn.async_press()
+        self.coordinator.async_set_all_off.assert_called_once()
+
+    async def test_smart_boost_button(self):
+        btn = DomolinkTadoSmartBoostButton(self.coordinator)
+        self.assertEqual(btn.unique_id, "domolink_tado_631338_smart_boost")
+        await btn.async_press()
+        self.coordinator.async_smart_boost.assert_called_once()
+
+    async def test_zone_buttons(self):
+        btn_res = DomolinkTadoZoneResumeScheduleButton(self.coordinator, 1)
+        self.assertEqual(btn_res.unique_id, "domolink_tado_631338_1_resume_schedule")
+        await btn_res.async_press()
+        self.coordinator.async_resume_schedule.assert_called_once_with(1)
+
+        btn_boost = DomolinkTadoZoneBoostButton(self.coordinator, 1)
+        self.assertEqual(btn_boost.unique_id, "domolink_tado_631338_1_smart_boost")
+        await btn_boost.async_press()
+        self.coordinator.async_set_zone_boost.assert_called_once_with(1)
+
+    async def test_button_async_setup_entry(self):
+        entry = MagicMock()
+        entry.entry_id = "entry_123"
+        self.hass.data = {"domolink_tado": {"entry_123": {"coordinator": self.coordinator}}}
+
+        added_entities = []
+        def add_entities(ents):
+            added_entities.extend(ents)
+
+        await async_setup_button_entry(self.hass, entry, add_entities)
+        # 3 globaux + 2 par zone (2 zones -> 4 boutons de zone) = 7 boutons
+        self.assertEqual(len(added_entities), 7)
+
+
+class TestGlobalEcoSwitch(unittest.IsolatedAsyncioTestCase):
+    """Tests pour le commutateur global Mode Éco."""
+
+    def setUp(self):
+        self.coordinator = MagicMock()
+        self.coordinator.home_id = 631338
+        self.coordinator.home_name = "Maison"
+        self.coordinator.entry = MagicMock()
+        self.coordinator.entry.options = {CONF_ECO_TEMP: 17.0}
+        self.coordinator.data = {
+            "zones": {
+                1: {
+                    "type": "HEATING",
+                    "is_overlay_active": False,
+                    "target_temperature": 21.0,
+                },
+                2: {
+                    "type": "HEATING",
+                    "is_overlay_active": False,
+                    "target_temperature": 20.0,
+                },
+            }
+        }
+        self.coordinator.async_set_eco_all = AsyncMock()
+        self.coordinator.async_resume_all_schedules = AsyncMock()
+
+    async def test_eco_switch_state(self):
+        switch = DomolinkTadoGlobalEcoSwitch(self.coordinator)
+        self.assertEqual(switch.unique_id, "domolink_tado_631338_global_eco_switch")
+        self.assertFalse(switch.is_on)
+
+        # Quand toutes les zones sont à 17°C en forçage manuel
+        self.coordinator.data["zones"][1]["is_overlay_active"] = True
+        self.coordinator.data["zones"][1]["target_temperature"] = 17.0
+        self.coordinator.data["zones"][2]["is_overlay_active"] = True
+        self.coordinator.data["zones"][2]["target_temperature"] = 17.0
+
+        self.assertTrue(switch.is_on)
+
+    async def test_eco_switch_actions(self):
+        switch = DomolinkTadoGlobalEcoSwitch(self.coordinator)
+        await switch.async_turn_on()
+        self.coordinator.async_set_eco_all.assert_called_once()
+
+        await switch.async_turn_off()
+        self.coordinator.async_resume_all_schedules.assert_called_once()
+
+
+class TestWaterHeaterEntity(unittest.IsolatedAsyncioTestCase):
+    """Tests pour l'entité chauffe-eau sanitaire DomoLink-Tado."""
+
+    def setUp(self):
+        self.coordinator = MagicMock()
+        self.coordinator.home_id = 631338
+        self.coordinator.data = {
+            "zones": {
+                3: {
+                    "zone_id": 3,
+                    "name": "Ballon ECS",
+                    "type": "HOT_WATER",
+                    "power": "ON",
+                    "is_overlay_active": False,
+                    "inside_temperature": 52.0,
+                    "target_temperature": 55.0,
+                },
+                1: {
+                    "zone_id": 1,
+                    "name": "Salon",
+                    "type": "HEATING",
+                },
+            }
+        }
+        self.coordinator.async_set_water_heater_mode = AsyncMock()
+        self.coordinator.async_set_water_heater_temperature = AsyncMock()
+
+    def test_water_heater_properties(self):
+        wh = DomolinkTadoWaterHeater(self.coordinator, 3)
+        self.assertEqual(wh.unique_id, "domolink_tado_631338_3_water_heater")
+        self.assertEqual(wh.current_operation, "auto")
+        self.assertEqual(wh.current_temperature, 52.0)
+        self.assertEqual(wh.target_temperature, 55.0)
+
+        # Overlay actif -> mode heat
+        self.coordinator.data["zones"][3]["is_overlay_active"] = True
+        self.assertEqual(wh.current_operation, "heat")
+
+        # Coupure complète -> mode off
+        self.coordinator.data["zones"][3]["power"] = "OFF"
+        self.assertEqual(wh.current_operation, "off")
+
+    async def test_water_heater_actions(self):
+        wh = DomolinkTadoWaterHeater(self.coordinator, 3)
+        await wh.async_set_operation_mode("off")
+        self.coordinator.async_set_water_heater_mode.assert_called_once_with(3, "off")
+
+        await wh.async_set_temperature(temperature=60.0)
+        self.coordinator.async_set_water_heater_temperature.assert_called_once_with(3, 60.0)
+
+    async def test_water_heater_setup_entry(self):
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        hass.data = {"domolink_tado": {"test_entry": {"coordinator": self.coordinator}}}
+
+        added_entities = []
+        def add_entities(ents):
+            added_entities.extend(ents)
+
+        await async_setup_water_heater_entry(hass, entry, add_entities)
+        # Seule la zone HOT_WATER doit être ajoutée (pas la zone HEATING)
+        self.assertEqual(len(added_entities), 1)
+        self.assertIsInstance(added_entities[0], DomolinkTadoWaterHeater)

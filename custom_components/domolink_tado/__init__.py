@@ -149,6 +149,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         duration = call.data.get("duration", 1800)
         await coordinator.async_set_boost(temp=temp, duration_seconds=duration)
 
+    async def handle_smart_boost(call: ServiceCall) -> None:
+        """Activer le Smart Boost avec paramètres personnalisés ou par défaut."""
+        temp = call.data.get("temperature")
+        duration = call.data.get("duration")
+        zone_ids = call.data.get("zone_ids")
+        await coordinator.async_smart_boost(
+            target_temp=temp,
+            duration_seconds=duration,
+            target_zone_ids=zone_ids,
+        )
+
     async def handle_child_lock(call: ServiceCall) -> None:
         """Activer ou désactiver la sécurité enfant sur une tête."""
         serial = call.data.get("device_serial")
@@ -195,6 +206,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_register(DOMAIN, "set_all_off", handle_all_off)
     if not hass.services.has_service(DOMAIN, "set_boost"):
         hass.services.async_register(DOMAIN, "set_boost", handle_boost)
+    if not hass.services.has_service(DOMAIN, "smart_boost"):
+        hass.services.async_register(DOMAIN, "smart_boost", handle_smart_boost)
     if not hass.services.has_service(DOMAIN, "set_child_lock"):
         hass.services.async_register(DOMAIN, "set_child_lock", handle_child_lock)
     if not hass.services.has_service(DOMAIN, "set_presence"):

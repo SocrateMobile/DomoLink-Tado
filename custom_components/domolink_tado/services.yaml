@@ -31,6 +31,29 @@ set_boost:
           step: 300
           unit_of_measurement: "s"
 
+smart_boost:
+  name: Activer le Smart Boost
+  description: Déclenche un boost intelligent sur toutes les pièces ou sur une sélection ciblée, avec respect des durées et consignes configurées.
+  fields:
+    temperature:
+      name: Température cible (°C)
+      description: Température de consigne (laisse vide pour utiliser les paramètres d'intégration).
+      selector:
+        number:
+          min: 15.0
+          max: 30.0
+          step: 0.5
+          unit_of_measurement: "°C"
+    duration:
+      name: Durée (secondes)
+      description: Durée du boost en secondes (laisse vide pour utiliser les paramètres d'intégration).
+      selector:
+        number:
+          min: 300
+          max: 7200
+          step: 300
+          unit_of_measurement: "s"
+
 set_child_lock:
   name: Sécurité enfant tête
   description: Active ou désactive le verrouillage physique sur une tête thermostatique.
