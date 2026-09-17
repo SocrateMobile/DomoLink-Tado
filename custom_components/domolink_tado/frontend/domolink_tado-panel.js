@@ -245,8 +245,10 @@ class DomolinkTadoPanel extends HTMLElement {
       const labels = Array.isArray(attrs.labels) ? attrs.labels : [];
       labels.forEach((l) => labelsSet.add(l));
 
-      const primaryDevice = devices[0] || {};
-      const primaryDeviceType = attrs.device_type || primaryDevice.device_type || primaryDevice.type || primaryDevice.deviceType || (name.toLowerCase().includes("thermostat") ? "RU01" : "VA01");
+      const valveModes = {};
+      if (attrs.valve_calibration_modes && typeof attrs.valve_calibration_modes === "object") {
+        Object.assign(valveModes, attrs.valve_calibration_modes);
+      }
 
       for (const d of devices) {
         allDevices.push({
@@ -258,6 +260,8 @@ class DomolinkTadoPanel extends HTMLElement {
           connection_state: d.connection_state || "CONNECTED",
           zone_name: name,
           zone_id: zoneId,
+          offset: d.offset != null ? parseFloat(d.offset) : 0.0,
+          raw_inside_temperature: attrs.raw_inside_temperature,
         });
       }
 
@@ -276,6 +280,10 @@ class DomolinkTadoPanel extends HTMLElement {
         open_window: openWindow,
         child_locked: childLocked,
         labels: labels,
+        temp_sensors: Array.isArray(attrs.zone_temp_sensors)
+          ? attrs.zone_temp_sensors
+          : (attrs.zone_temp_sensors ? [attrs.zone_temp_sensors] : []),
+        raw_inside_temp: attrs.raw_inside_temperature,
         devices: devices,
         primary_device_type: primaryDeviceType,
       });
@@ -295,6 +303,7 @@ class DomolinkTadoPanel extends HTMLElement {
       outdoor_temp: outdoorTemp,
       active_count: activeCount,
       labels: Array.from(labelsSet),
+      valveModes: valveModes,
     };
   }
 
@@ -1375,6 +1384,124 @@ class DomolinkTadoPanel extends HTMLElement {
           cursor: pointer;
         }
 
+        .room-section-block {
+          margin-top: 8px;
+        }
+
+        .room-section-title {
+          font-size: 11px;
+          color: #94a3b8;
+          font-weight: 700;
+          margin-bottom: 4px;
+        }
+
+        .room-sensors-editor {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+        }
+
+        .sensor-pill-badge {
+          background: rgba(16, 185, 129, 0.15);
+          color: #34d399;
+          border: 1px solid rgba(16, 185, 129, 0.3);
+          padding: 4px 10px;
+          border-radius: 20px;
+          font-size: 11px;
+          font-weight: 600;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+
+        .sensor-remove-btn {
+          cursor: pointer;
+          opacity: 0.7;
+          font-size: 13px;
+        }
+        .sensor-remove-btn:hover {
+          opacity: 1;
+          color: #ef4444;
+        }
+
+        .sensor-select-input {
+          background: #1e293b;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 10px;
+          padding: 6px 10px;
+          color: #ffffff;
+          font-size: 11px;
+          outline: none;
+          max-width: 250px;
+        }
+
+        .btn-add-sensor {
+          background: #059669;
+          border: none;
+          color: #ffffff;
+          border-radius: 10px;
+          padding: 6px 12px;
+          font-size: 11px;
+          font-weight: 700;
+          cursor: pointer;
+        }
+        .btn-add-sensor:hover {
+          background: #10b981;
+        }
+
+        .max-sensors-notice {
+          font-size: 11px;
+          color: #94a3b8;
+          font-style: italic;
+        }
+
+        .calib-avg-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          background: rgba(56, 189, 248, 0.12);
+          border: 1px solid rgba(56, 189, 248, 0.3);
+          color: #38bdf8;
+          padding: 4px 8px;
+          border-radius: 8px;
+          font-weight: 700;
+          font-size: 12px;
+          white-space: nowrap;
+        }
+
+        .calib-mode-toggle {
+          display: inline-flex;
+          background: rgba(15, 23, 42, 0.7);
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 20px;
+          padding: 2px;
+          gap: 2px;
+        }
+
+        .calib-mode-btn {
+          border: none;
+          background: transparent;
+          color: #64748b;
+          font-size: 10px;
+          font-weight: 700;
+          padding: 4px 8px;
+          border-radius: 14px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+        }
+
+        .calib-mode-btn.active-manual {
+          background: #334155;
+          color: #f1f5f9;
+        }
+
+        .calib-mode-btn.active-auto {
+          background: linear-gradient(135deg, #0284c7, #2563eb);
+          color: #ffffff;
+          box-shadow: 0 0 10px rgba(2, 132, 199, 0.4);
+        }
+
         .calibration-table {
           width: 100%;
           border-collapse: collapse;
@@ -1603,14 +1730,14 @@ class DomolinkTadoPanel extends HTMLElement {
               </div>
             </div>
 
-            <!-- Carte 2 : Étiquettes des Pièces -->
+            <!-- Carte 2 : Étiquettes & Capteurs de Température -->
             <div class="settings-card">
               <div class="settings-card-header">
                 <div>
-                  <h2 class="settings-card-title"><span>🏷️</span> Étiquettes des Pièces (Labels & Filtres)</h2>
-                  <p class="settings-card-desc">Attribuez des étiquettes (ex: RDC, Étage, Chambres, Sud) pour filtrer vos pièces d'un clic.</p>
+                  <h2 class="settings-card-title"><span>🏷️</span> Étiquettes & Capteurs de Température</h2>
+                  <p class="settings-card-desc">Attribuez des étiquettes et associez jusqu'à 4 capteurs de température externes par pièce pour calibrer vos vannes.</p>
                 </div>
-                <button class="btn-save-all" id="btnSaveLabels">💾 Sauvegarder les étiquettes</button>
+                <button class="btn-save-all" id="btnSaveLabels">💾 Sauvegarder les paramètres</button>
               </div>
 
               <div class="room-labels-list" id="roomLabelsList"></div>
@@ -1621,7 +1748,7 @@ class DomolinkTadoPanel extends HTMLElement {
               <div class="settings-card-header">
                 <div>
                   <h2 class="settings-card-title"><span>🌡️</span> Calibration & Offset des Sondes</h2>
-                  <p class="settings-card-desc">Corrigez les écarts de température mesurés par le matériel (-5.0°C à +5.0°C).</p>
+                  <p class="settings-card-desc">Corrigez les écarts de température mesurés par le matériel (-5.0°C à +5.0°C) en mode Manuel ou Auto.</p>
                 </div>
               </div>
 
@@ -1633,6 +1760,8 @@ class DomolinkTadoPanel extends HTMLElement {
                       <th>Pièce</th>
                       <th>Numéro de Série</th>
                       <th>Ajustement Offset (-5.0°C à +5.0°C)</th>
+                      <th>Mode</th>
+                      <th>T° Moyenne Capteurs</th>
                       <th>Action</th>
                     </tr>
                   </thead>
@@ -2465,12 +2594,50 @@ class DomolinkTadoPanel extends HTMLElement {
       }
     }
 
+    if (!this._sensorDraft || Object.keys(this._sensorDraft).length === 0) {
+      this._sensorDraft = {};
+      for (const z of data.zones) {
+        this._sensorDraft[String(z.zone_id)] = Array.isArray(z.temp_sensors)
+          ? [...z.temp_sensors]
+          : (z.temp_sensors ? [z.temp_sensors] : []);
+      }
+    }
+
+    if (!this._valveModesDraft) {
+      this._valveModesDraft = { ...(data.valveModes || {}) };
+    }
+
+    // Découverte de tous les capteurs de température disponibles dans Home Assistant
+    const allTempSensors = [];
+    if (this._hass && this._hass.states) {
+      for (const entityId of Object.keys(this._hass.states)) {
+        if (!entityId.startsWith("sensor.")) continue;
+        const st = this._hass.states[entityId];
+        if (!st) continue;
+        const dc = st.attributes?.device_class;
+        const uom = st.attributes?.unit_of_measurement;
+        if (dc === "temperature" || uom === "°C" || uom === "°F" || entityId.includes("temperature")) {
+          const friendly = st.attributes?.friendly_name || entityId;
+          const currentVal = st.state !== "unavailable" && st.state !== "unknown" ? `${parseFloat(st.state).toFixed(1)}°C` : "--";
+          allTempSensors.push({
+            id: entityId,
+            name: friendly,
+            temp: currentVal,
+          });
+        }
+      }
+      allTempSensors.sort((a, b) => a.name.localeCompare(b.name));
+    }
+
     const listEl = this.querySelector("#roomLabelsList");
     if (listEl) {
       listEl.innerHTML = data.zones
         .map((z) => {
           const zid = String(z.zone_id);
           const currentTags = this._settingsDraft[zid] || [];
+          const currentSensors = this._sensorDraft[zid] || [];
+          const availableForRoom = allTempSensors.filter((s) => !currentSensors.includes(s.id));
+
           const tagsHtml = currentTags
             .map(
               (tag, idx) => `
@@ -2482,16 +2649,52 @@ class DomolinkTadoPanel extends HTMLElement {
             )
             .join("");
 
+          const sensorsHtml = currentSensors
+            .map((sId, sIdx) => {
+              const entState = this._hass?.states?.[sId];
+              const sName = entState?.attributes?.friendly_name || sId;
+              const sVal = entState && entState.state !== "unavailable" && entState.state !== "unknown" ? `${parseFloat(entState.state).toFixed(1)}°C` : "--";
+              return `
+                <span class="sensor-pill-badge" title="${sId}">
+                  🌡️ ${sName} (${sVal})
+                  <span class="sensor-remove-btn" data-zid="${zid}" data-idx="${sIdx}">✕</span>
+                </span>
+              `;
+            })
+            .join("");
+
+          const sensorAdderHtml = currentSensors.length < 4
+            ? `
+              <select class="sensor-select-input" id="selectSensor_${zid}">
+                <option value="">-- Associer un capteur (${availableForRoom.length} dispo) --</option>
+                ${availableForRoom.map((s) => `<option value="${s.id}">${s.name} (${s.temp})</option>`).join("")}
+              </select>
+              <button class="btn-add-sensor" data-zid="${zid}">+ Associer</button>
+            `
+            : `<span class="max-sensors-notice">✓ Limite de 4 capteurs atteinte</span>`;
+
           return `
           <div class="room-label-item">
             <div class="room-label-item-left">
               ${getDeviceSvg(z.primary_device_type, 26, "#38bdf8")}
               <span class="room-label-item-name">${z.name}</span>
             </div>
-            <div class="room-tags-editor">
-              ${tagsHtml}
-              <input type="text" class="add-tag-input" id="inputTag_${zid}" placeholder="Ajouter un tag..." />
-              <button class="btn-add-tag" data-zid="${zid}">+ Ajouter</button>
+
+            <div class="room-section-block">
+              <div class="room-section-title">🏷️ Étiquettes (Filtres) :</div>
+              <div class="room-tags-editor">
+                ${tagsHtml}
+                <input type="text" class="add-tag-input" id="inputTag_${zid}" placeholder="Ajouter un tag..." />
+                <button class="btn-add-tag" data-zid="${zid}">+ Ajouter</button>
+              </div>
+            </div>
+
+            <div class="room-section-block">
+              <div class="room-section-title">🌡️ Capteurs de Température (${currentSensors.length}/4 max) :</div>
+              <div class="room-sensors-editor">
+                ${sensorsHtml}
+                ${sensorAdderHtml}
+              </div>
             </div>
           </div>
         `;
@@ -2524,14 +2727,103 @@ class DomolinkTadoPanel extends HTMLElement {
           }
         });
       });
+
+      listEl.querySelectorAll(".sensor-remove-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const zid = btn.dataset.zid;
+          const idx = parseInt(btn.dataset.idx, 10);
+          if (this._sensorDraft[zid]) {
+            this._sensorDraft[zid].splice(idx, 1);
+            this._renderSettingsView();
+          }
+        });
+      });
+
+      listEl.querySelectorAll(".btn-add-sensor").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const zid = btn.dataset.zid;
+          const select = listEl.querySelector(`#selectSensor_${zid}`);
+          const val = select ? select.value : "";
+          if (val) {
+            if (!this._sensorDraft[zid]) this._sensorDraft[zid] = [];
+            if (!this._sensorDraft[zid].includes(val) && this._sensorDraft[zid].length < 4) {
+              this._sensorDraft[zid].push(val);
+            }
+            this._renderSettingsView();
+          }
+        });
+      });
     }
 
     const calibBody = this.querySelector("#calibrationTableBody");
     if (calibBody) {
       calibBody.innerHTML = data.allDevices
         .filter((d) => getDeviceTypeCategory(d.device_type) === "VALVE" || getDeviceTypeCategory(d.device_type) === "THERMOSTAT" || getDeviceTypeCategory(d.device_type) === "SENSOR")
-        .map(
-          (d) => `
+        .map((d) => {
+          const zone = data.zones.find(
+            (z) => String(z.zone_id) === String(d.zone_id) || z.name === d.zone_name
+          );
+          const zid = zone ? String(zone.zone_id) : String(d.zone_id || "");
+          const roomSensors = (this._sensorDraft && this._sensorDraft[zid]) || zone?.temp_sensors || [];
+
+          // Calcul de la température moyenne des capteurs externes de la pièce
+          let validTemps = [];
+          let sensorDetails = [];
+          if (roomSensors.length > 0 && this._hass?.states) {
+            for (const sId of roomSensors) {
+              const st = this._hass.states[sId];
+              if (st && st.state !== "unavailable" && st.state !== "unknown") {
+                const num = parseFloat(st.state);
+                if (!isNaN(num)) {
+                  validTemps.push(num);
+                  sensorDetails.push(`${st.attributes?.friendly_name || sId}: ${num.toFixed(1)}°C`);
+                }
+              }
+            }
+          }
+
+          const hasSensors = roomSensors.length > 0 && validTemps.length > 0;
+          const avgTemp = hasSensors
+            ? (validTemps.reduce((acc, v) => acc + v, 0) / validTemps.length).toFixed(1)
+            : null;
+
+          // Mode actuel : AUTO vs MANUEL
+          const currentMode = this._valveModesDraft?.[d.serial] || data.valveModes?.[d.serial] || "MANUAL";
+          const isAuto = hasSensors && currentMode === "AUTO";
+
+          // Calcul de l'offset cible
+          const currOffset = d.offset != null ? parseFloat(d.offset) : 0.0;
+          const rawTemp = parseFloat(d.raw_inside_temperature ?? zone?.raw_inside_temp ?? zone?.current_temp);
+          let targetOffset = currOffset;
+          if (hasSensors && !isNaN(rawTemp)) {
+            const diff = parseFloat(avgTemp) - rawTemp;
+            targetOffset = Math.round(Math.max(-5.0, Math.min(5.0, currOffset + diff)) * 10) / 10;
+          }
+
+          const displayedOffset = isAuto ? targetOffset : currOffset;
+
+          const modeHtml = hasSensors
+            ? `
+              <td>
+                <div class="calib-mode-toggle" data-serial="${d.serial}">
+                  <button class="calib-mode-btn ${!isAuto ? 'active-manual' : ''}" data-serial="${d.serial}" data-mode="MANUAL">MANUEL</button>
+                  <button class="calib-mode-btn ${isAuto ? 'active-auto' : ''}" data-serial="${d.serial}" data-mode="AUTO">AUTO</button>
+                </div>
+              </td>
+            `
+            : `<td><span style="color: #64748b; font-size: 11px;">—</span></td>`;
+
+          const avgBadgeHtml = hasSensors
+            ? `
+              <td>
+                <span class="calib-avg-badge" title="${sensorDetails.join('\n')}">
+                  🌡️ ${avgTemp}°C <small>(${validTemps.length})</small>
+                </span>
+              </td>
+            `
+            : `<td><span style="color: #64748b; font-size: 11px;">—</span></td>`;
+
+          return `
           <tr>
             <td>
               <div style="display: flex; align-items: center; gap: 8px;">
@@ -2543,17 +2835,35 @@ class DomolinkTadoPanel extends HTMLElement {
             <td><code>${d.serial}</code></td>
             <td>
               <div class="calibration-stepper">
-                <input type="range" min="-5.0" max="5.0" step="0.1" value="0.0" id="sliderCalib_${d.serial}" style="width: 130px;" />
-                <span class="calib-val-badge" id="badgeCalib_${d.serial}">0.0°C</span>
+                <input type="range" min="-5.0" max="5.0" step="0.1" value="${displayedOffset.toFixed(1)}" id="sliderCalib_${d.serial}" style="width: 120px; ${isAuto ? 'opacity: 0.6; cursor: not-allowed;' : ''}" ${isAuto ? 'disabled' : ''} />
+                <span class="calib-val-badge" id="badgeCalib_${d.serial}">${displayedOffset > 0 ? '+' : ''}${displayedOffset.toFixed(1)}°C</span>
               </div>
             </td>
+            ${modeHtml}
+            ${avgBadgeHtml}
             <td>
-              <button class="btn-apply-offset" data-serial="${d.serial}">Appliquer</button>
+              <button class="btn-apply-offset" data-serial="${d.serial}" ${isAuto ? 'disabled style="opacity: 0.4; cursor: not-allowed;"' : ''}>${isAuto ? 'Auto-calibré' : 'Appliquer'}</button>
             </td>
           </tr>
-        `
-        )
+        `;
+        })
         .join("");
+
+      calibBody.querySelectorAll(".calib-mode-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const serial = btn.dataset.serial;
+          const mode = btn.dataset.mode;
+          if (!this._valveModesDraft) this._valveModesDraft = {};
+          this._valveModesDraft[serial] = mode;
+
+          this._callService("domolink_tado", "set_valve_calibration_mode", {
+            device_serial: serial,
+            mode: mode,
+          });
+
+          this._renderSettingsView();
+        });
+      });
 
       calibBody.querySelectorAll("input[type='range']").forEach((slider) => {
         const serial = slider.id.replace("sliderCalib_", "");
@@ -2566,6 +2876,7 @@ class DomolinkTadoPanel extends HTMLElement {
 
       calibBody.querySelectorAll(".btn-apply-offset").forEach((btn) => {
         btn.addEventListener("click", () => {
+          if (btn.disabled) return;
           const serial = btn.dataset.serial;
           const slider = calibBody.querySelector(`#sliderCalib_${serial}`);
           const offset = slider ? parseFloat(slider.value) : 0.0;
@@ -2613,11 +2924,16 @@ class DomolinkTadoPanel extends HTMLElement {
     this._callService("domolink_tado", "save_room_labels", {
       labels: this._settingsDraft,
     });
+    if (this._sensorDraft) {
+      this._callService("domolink_tado", "save_room_sensors", {
+        sensors: this._sensorDraft,
+      });
+    }
     const saveBtn = this.querySelector("#btnSaveLabels");
     if (saveBtn) {
-      saveBtn.textContent = "✓ Étiquettes enregistrées !";
+      saveBtn.textContent = "✓ Paramètres enregistrés !";
       setTimeout(() => {
-        saveBtn.textContent = "💾 Sauvegarder les étiquettes";
+        saveBtn.textContent = "💾 Sauvegarder les paramètres";
       }, 2500);
     }
   }

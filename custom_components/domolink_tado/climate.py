@@ -20,6 +20,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import (
     CONF_OVERLAY_DURATION,
     CONF_OVERLAY_MODE,
+    CONF_VALVE_CALIBRATION_MODES,
+    CONF_ZONE_TEMP_ENTITIES,
     DEFAULT_OVERLAY_DURATION,
     DEFAULT_OVERLAY_MODE,
     DOMAIN,
@@ -265,9 +267,17 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
                     "connection_state": d.get("connectionState", {}).get("value") if isinstance(d.get("connectionState"), dict) else (d.get("connectionState") or "CONNECTED"),
                     "firmware": d.get("currentFirmwareVersion") or d.get("firmware") or "v98.1",
                     "child_lock": d.get("childLockEnabled") or d.get("child_lock") or False,
+                    "offset": (
+                        float(d.get("currentMountedOffset", {}).get("celsius", 0.0))
+                        if isinstance(d.get("currentMountedOffset"), dict)
+                        else float(d.get("characteristics", {}).get("temperatureOffset", {}).get("celsius", 0.0))
+                    ),
                 }
                 for d in devs
             ],
+            "raw_inside_temperature": z.get("raw_inside_temperature"),
+            "zone_temp_sensors": self.coordinator.entry.options.get(CONF_ZONE_TEMP_ENTITIES, {}).get(str(self.zone_id), []),
+            "valve_calibration_modes": self.coordinator.entry.options.get(CONF_VALVE_CALIBRATION_MODES, {}),
         }
         if self.is_ac:
             attrs["ac_mode"] = z.get("ac_mode")

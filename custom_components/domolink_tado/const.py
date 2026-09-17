@@ -5,7 +5,7 @@ from homeassistant.const import Platform
 
 DOMAIN = "domolink_tado"
 NAME = "DomoLink-Tado"
-VERSION = "1.5.2"
+VERSION = "1.5.3"
 
 # Endpoints API Tado
 TADO_AUTH_BASE = "https://login.tado.com/oauth2"
@@ -42,7 +42,12 @@ CONF_SMART_BOOST_DURATION = "smart_boost_duration"
 CONF_ZONE_TEMP_ENTITIES = "zone_temp_entities"
 CONF_ZONE_HUMIDITY_ENTITIES = "zone_humidity_entities"
 CONF_AUTO_OFFSET_CALIBRATION = "auto_offset_calibration"
+CONF_VALVE_CALIBRATION_MODES = "valve_calibration_modes"
 CONF_SHOW_QUOTA_SENSORS = "show_quota_sensors"
+
+# Modes de calibration de température par vanne
+CALIBRATION_MODE_AUTO = "AUTO"
+CALIBRATION_MODE_MANUAL = "MANUAL"
 
 # Modes de préchauffage
 PREHEAT_MODE_ADVISORY = "ADVISORY"

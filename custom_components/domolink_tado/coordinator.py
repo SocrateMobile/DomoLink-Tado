@@ -34,8 +34,11 @@ from .const import (
     CONF_ROOM_LABELS,
     CONF_SMART_BOOST_DURATION,
     CONF_SMART_BOOST_TEMP,
+    CONF_VALVE_CALIBRATION_MODES,
     CONF_ZONE_HUMIDITY_ENTITIES,
     CONF_ZONE_TEMP_ENTITIES,
+    CALIBRATION_MODE_AUTO,
+    CALIBRATION_MODE_MANUAL,
     DEFAULT_AUTO_GEOFENCING_ENABLED,
     DEFAULT_AUTO_OFFSET_CALIBRATION,
     DEFAULT_AUTO_WINDOW_DURATION,
@@ -308,33 +311,69 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 auto_offset_calib = self.entry.options.get(
                     CONF_AUTO_OFFSET_CALIBRATION, DEFAULT_AUTO_OFFSET_CALIBRATION
                 )
+                valve_calib_modes = self.entry.options.get(CONF_VALVE_CALIBRATION_MODES, {})
 
-                # Remplacement par capteur de température externe Home Assistant (Priorité Confort)
-                ext_temp_ent = temp_entities.get(str(zid))
-                if ext_temp_ent and getattr(self.hass, "states", None):
-                    st = self.hass.states.get(ext_temp_ent)
-                    if st and st.state not in ("unavailable", "unknown"):
-                        try:
-                            inside_temp = float(st.state)
-                            is_external_temp = True
-                        except (ValueError, TypeError):
-                            pass
+                # Remplacement par capteur(s) de température externe(s) Home Assistant (Moyenne jusqu'à 4 sondes)
+                ext_temp_raw = temp_entities.get(str(zid))
+                ext_temp_list: list[str] = []
+                if isinstance(ext_temp_raw, list):
+                    ext_temp_list = [str(x).strip() for x in ext_temp_raw if x]
+                elif isinstance(ext_temp_raw, str) and ext_temp_raw.strip():
+                    ext_temp_list = [x.strip() for x in ext_temp_raw.split(",") if x.strip()]
 
-                # Remplacement par capteur d'humidité externe Home Assistant
-                ext_hum_ent = hum_entities.get(str(zid))
-                if ext_hum_ent and getattr(self.hass, "states", None):
-                    st = self.hass.states.get(ext_hum_ent)
-                    if st and st.state not in ("unavailable", "unknown"):
-                        try:
-                            humidity = float(st.state)
-                            is_external_hum = True
-                        except (ValueError, TypeError):
-                            pass
+                valid_temps: list[float] = []
+                detected_hum_entities: list[str] = []
+                if getattr(self.hass, "states", None):
+                    for ent_id in ext_temp_list:
+                        st = self.hass.states.get(ent_id)
+                        if st and st.state not in ("unavailable", "unknown"):
+                            try:
+                                valid_temps.append(float(st.state))
+                            except (ValueError, TypeError):
+                                pass
+
+                        # Détection automatique de la sonde d'humidité jumelle
+                        paired_candidates = [
+                            ent_id.replace("_temperature", "_humidity").replace("_temp", "_humidity"),
+                            ent_id.replace("_temperature", "_humidite").replace("_temp", "_humidite"),
+                            ent_id.replace("_temperature", "_hygrometry").replace("_temp", "_hygrometry"),
+                        ]
+                        for cand in paired_candidates:
+                            if cand != ent_id and self.hass.states.get(cand):
+                                detected_hum_entities.append(cand)
+                                break
+
+                if valid_temps:
+                    inside_temp = round(sum(valid_temps) / len(valid_temps), 1)
+                    is_external_temp = True
+
+                # Remplacement par capteur(s) d'humidité externe(s) Home Assistant
+                ext_hum_raw = hum_entities.get(str(zid))
+                ext_hum_list: list[str] = []
+                if isinstance(ext_hum_raw, list):
+                    ext_hum_list = [str(x).strip() for x in ext_hum_raw if x]
+                elif isinstance(ext_hum_raw, str) and ext_hum_raw.strip():
+                    ext_hum_list = [x.strip() for x in ext_hum_raw.split(",") if x.strip()]
+
+                all_hum_entities = list(dict.fromkeys(ext_hum_list + detected_hum_entities))
+                valid_hums: list[float] = []
+                if getattr(self.hass, "states", None):
+                    for ent_id in all_hum_entities:
+                        st = self.hass.states.get(ent_id)
+                        if st and st.state not in ("unavailable", "unknown"):
+                            try:
+                                valid_hums.append(float(st.state))
+                            except (ValueError, TypeError):
+                                pass
+
+                if valid_hums:
+                    humidity = round(sum(valid_hums) / len(valid_hums), 1)
+                    is_external_hum = True
 
                 # Auto-calibrage physique des têtes thermostatiques par capteur externe (anti-battement 0.5°C & cooldown 30min)
+                # Option C (Hybride) : vérifie le mode individuel de la vanne (AUTO vs MANUAL) ou le réglage global
                 if (
-                    auto_offset_calib
-                    and is_external_temp
+                    is_external_temp
                     and raw_inside_temp is not None
                     and inside_temp is not None
                 ):
@@ -342,6 +381,14 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     for d in enhanced_devices:
                         serial = d.get("serialNo")
                         if not serial:
+                            continue
+
+                        # Mode vanne : AUTO vs MANUAL
+                        valve_mode = valve_calib_modes.get(serial)
+                        is_auto = (valve_mode == CALIBRATION_MODE_AUTO) or (
+                            valve_mode is None and auto_offset_calib
+                        )
+                        if not is_auto:
                             continue
 
                         curr_offset = 0.0
@@ -356,12 +403,13 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             if now - last_calib >= OFFSET_UPDATE_COOLDOWN:
                                 self._last_offset_update_time[serial] = now
                                 _LOGGER.info(
-                                    "DomoLink-Tado: Auto-calibrage offset physique %s (zone %s) : actuel=%.1f°C -> nouveau=%.1f°C (diff=%.1f°C)",
+                                    "DomoLink-Tado: Auto-calibrage offset physique %s (zone %s) [AUTO] : actuel=%.1f°C -> nouveau=%.1f°C (diff=%.1f°C, moy=%.1f°C)",
                                     serial,
                                     zid,
                                     curr_offset,
                                     new_offset,
                                     temp_diff,
+                                    inside_temp,
                                 )
                                 self._create_safe_task(
                                     self.async_set_temperature_offset(serial, new_offset, refresh=False),
@@ -1107,5 +1155,47 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         current_options = dict(self.entry.options)
         current_options[CONF_ROOM_LABELS] = labels_dict
         self.hass.config_entries.async_update_entry(self.entry, options=current_options)
+        await self.async_request_refresh()
+
+    async def async_save_room_sensors(self, sensors_dict: dict[str, Any]) -> None:
+        """Save room external temperature sensors to config entry options."""
+        current_options = dict(self.entry.options)
+        current_options[CONF_ZONE_TEMP_ENTITIES] = sensors_dict
+        self.hass.config_entries.async_update_entry(self.entry, options=current_options)
+        await self.async_request_refresh()
+
+    async def async_set_valve_calibration_mode(self, device_serial: str, mode: str) -> None:
+        """Set calibration mode (AUTO or MANUAL) for a specific valve."""
+        current_options = dict(self.entry.options)
+        modes = dict(current_options.get(CONF_VALVE_CALIBRATION_MODES, {}))
+        modes[device_serial] = mode
+        current_options[CONF_VALVE_CALIBRATION_MODES] = modes
+        self.hass.config_entries.async_update_entry(self.entry, options=current_options)
+
+        # If switched to AUTO, immediately compute and apply the target offset
+        if mode == CALIBRATION_MODE_AUTO and self.data and "zones" in self.data:
+            for zid, z_data in self.data["zones"].items():
+                devices = z_data.get("devices", [])
+                for d in devices:
+                    if d.get("serialNo") == device_serial:
+                        raw_temp = z_data.get("raw_inside_temperature")
+                        curr_temp = z_data.get("inside_temperature")
+                        if raw_temp is not None and curr_temp is not None:
+                            diff = float(curr_temp) - float(raw_temp)
+                            curr_offset = 0.0
+                            if "currentMountedOffset" in d and isinstance(d["currentMountedOffset"], dict):
+                                curr_offset = float(d["currentMountedOffset"].get("celsius", 0.0))
+                            elif "characteristics" in d and isinstance(d["characteristics"], dict):
+                                curr_offset = float(d["characteristics"].get("temperatureOffset", {}).get("celsius", 0.0))
+                            new_offset = round(max(-5.0, min(5.0, curr_offset + diff)), 1)
+                            _LOGGER.info(
+                                "DomoLink-Tado: Calibration immédiate [AUTO] sur %s : actuel=%.1f°C -> nouveau=%.1f°C",
+                                device_serial,
+                                curr_offset,
+                                new_offset,
+                            )
+                            await self.client.set_temperature_offset(device_serial, new_offset)
+                            self._last_offset_update_time[device_serial] = time.time()
+                            break
         await self.async_request_refresh()
 
