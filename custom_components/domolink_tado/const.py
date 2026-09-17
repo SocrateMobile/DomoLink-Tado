@@ -5,7 +5,7 @@ from homeassistant.const import Platform
 
 DOMAIN = "domolink_tado"
 NAME = "DomoLink-Tado"
-VERSION = "1.1.6"
+VERSION = "1.1.7"
 
 # Endpoints API Tado
 TADO_AUTH_BASE = "https://login.tado.com/oauth2"
@@ -65,5 +65,5 @@ PANEL_ICON = "mdi:radiator"
 PANEL_NAME = "domolink-tado-panel"
 PANEL_URL_PATH = "domolink_tado"
 
-# Polling intervals
-UPDATE_INTERVAL_SECONDS = 30
+# Polling intervals (5 minutes to preserve Tado API daily quota)
+UPDATE_INTERVAL_SECONDS = 300

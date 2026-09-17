@@ -56,6 +56,11 @@ if "homeassistant" not in sys.modules:
     class ConfigFlow:
         def __init_subclass__(cls, domain=None, **kwargs):
             pass
+        async def async_set_unique_id(self, uid): pass
+        def _abort_if_unique_id_configured(self): pass
+        def async_create_entry(self, **kwargs): return {"type": "create_entry", **kwargs}
+        def async_show_form(self, **kwargs): return {"type": "form", **kwargs}
+        def async_abort(self, **kwargs): return {"type": "abort", **kwargs}
     ha_entries.ConfigEntry = ConfigEntry
     ha_entries.OptionsFlow = OptionsFlow
     ha_entries.ConfigFlow = ConfigFlow
@@ -116,6 +121,24 @@ class TestTadoApiRateLimit(unittest.TestCase):
         resp.headers = {"RateLimit-Reset": "7.0"}
         delay = TadoClient._calculate_rate_limit_delay(resp, attempt=1)
         self.assertEqual(delay, 7.0)
+
+    def test_calculate_rate_limit_delay_with_tado_ratelimit_header(self):
+        resp = MagicMock()
+        resp.headers = {"ratelimit": '"perday";r=0;t=18.5'}
+        delay = TadoClient._calculate_rate_limit_delay(resp, attempt=0)
+        self.assertEqual(delay, 18.5)
+
+        resp.headers = {"ratelimit": '"perday";r=0;t=86400'}
+        delay_capped = TadoClient._calculate_rate_limit_delay(resp, attempt=0)
+        self.assertEqual(delay_capped, 30.0)
+
+        delay_uncapped = TadoClient._calculate_rate_limit_delay(resp, attempt=0, max_delay=100000.0)
+        self.assertEqual(delay_uncapped, 86400.0)
+
+    def test_client_headers_contain_referer_and_user_agent(self):
+        from custom_components.domolink_tado.tado_api import DEFAULT_REFERER, DEFAULT_USER_AGENT
+        self.assertEqual(DEFAULT_REFERER, "https://app.tado.com/")
+        self.assertEqual(DEFAULT_USER_AGENT, "PyTado/0.18.16")
 
     def test_calculate_rate_limit_delay_fallback_exponential(self):
         resp = MagicMock()
@@ -251,6 +274,35 @@ class TestConfigFlowAndTokenParsing(unittest.IsolatedAsyncioTestCase):
 
         with self.assertRaises(TadoAuthError):
             await TadoClient.poll_device_token(session, "test_code")
+
+    async def test_manual_home_valid(self):
+        """Test step_manual_home successfully creates entry with supplied home_id."""
+        flow = DomolinkTadoConfigFlow()
+        flow.hass = MagicMock()
+        flow.async_set_unique_id = AsyncMock()
+        flow._abort_if_unique_id_configured = MagicMock()
+        flow._tokens = {
+            "access_token": "acc_token",
+            "refresh_token": "ref_token",
+            "expires_at": 1234567,
+        }
+
+        res = await flow.async_step_manual_home({"home_id": 98765, "home_name": "Maison Test"})
+        self.assertEqual(res["type"], "create_entry")
+        self.assertEqual(res["title"], "DomoLink Tado (Maison Test)")
+        self.assertEqual(res["data"]["home_id"], 98765)
+        self.assertEqual(res["data"]["home_name"], "Maison Test")
+        self.assertEqual(res["data"]["access_token"], "acc_token")
+
+    async def test_manual_home_invalid_id(self):
+        """Test step_manual_home shows form with invalid_home_id error when ID is not an integer."""
+        flow = DomolinkTadoConfigFlow()
+        flow.hass = MagicMock()
+        flow._tokens = {"access_token": "acc_token"}
+
+        res = await flow.async_step_manual_home({"home_id": "not-a-number"})
+        self.assertEqual(res["type"], "form")
+        self.assertEqual(res["errors"]["base"], "invalid_home_id")
 
 
 if __name__ == "__main__":

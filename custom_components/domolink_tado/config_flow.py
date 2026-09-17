@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 import voluptuous as vol
@@ -99,34 +100,56 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 me = await client.get_me()
                 if not me or not isinstance(me, dict):
                     raise TadoError("Serveurs Tado temporairement indisponibles (profil non récupéré).")
-                # Extraction multi-formats du domicile (compatible toutes variantes de l'API Tado)
                 home_id: int | None = None
                 home_name: str = "Tado Home"
 
-                homes = me.get("homes")
-                if isinstance(homes, list) and len(homes) > 0:
-                    primary_home = homes[0]
-                    if isinstance(primary_home, dict):
-                        home_id = primary_home.get("id") or primary_home.get("homeId")
-                        home_name = primary_home.get("name") or "Tado Home"
-                    elif isinstance(primary_home, (int, str)):
-                        try:
-                            home_id = int(primary_home)
-                        except (ValueError, TypeError):
-                            pass
+                # 1. Si l'utilisateur a saisi manuellement son Home ID, l'utiliser directement (Bypass /me)
+                raw_manual_id = user_input.get(CONF_HOME_ID)
+                if raw_manual_id:
+                    try:
+                        val = int(str(raw_manual_id).strip())
+                        if val > 0:
+                            home_id = val
+                            home_name = str(user_input.get(CONF_HOME_NAME, "Maison Tado")).strip() or "Maison Tado"
+                    except (ValueError, TypeError):
+                        pass
 
+                # 2. Récupération automatique du profil et du domicile si non fourni manuellement
                 if home_id is None:
-                    raw_home_id = me.get("homeId") or me.get("id")
-                    if raw_home_id is not None:
-                        try:
-                            home_id = int(raw_home_id)
-                        except (ValueError, TypeError):
-                            pass
-                    if isinstance(me.get("name"), str) and me.get("name"):
-                        home_name = me["name"]
+                    client = TadoClient(
+                        session=session,
+                        access_token=tokens["access_token"],
+                        refresh_token=tokens.get("refresh_token"),
+                        expires_at=tokens.get("expires_at"),
+                    )
+                    me = await client.get_me()
+                    if not me or not isinstance(me, dict):
+                        raise TadoError("Serveurs Tado temporairement indisponibles (profil non récupéré).")
+                    # Extraction multi-formats du domicile (compatible toutes variantes de l'API Tado)
+                    homes = me.get("homes")
+                    if isinstance(homes, list) and len(homes) > 0:
+                        primary_home = homes[0]
+                        if isinstance(primary_home, dict):
+                            home_id = primary_home.get("id") or primary_home.get("homeId")
+                            home_name = primary_home.get("name") or "Tado Home"
+                        elif isinstance(primary_home, (int, str)):
+                            try:
+                                home_id = int(primary_home)
+                            except (ValueError, TypeError):
+                                pass
 
-                if not home_id:
-                    return self.async_abort(reason="no_homes_found")
+                    if home_id is None:
+                        raw_home_id = me.get("homeId") or me.get("id")
+                        if raw_home_id is not None:
+                            try:
+                                home_id = int(raw_home_id)
+                            except (ValueError, TypeError):
+                                pass
+                        if isinstance(me.get("name"), str) and me.get("name"):
+                            home_name = me["name"]
+
+                    if not home_id:
+                        return self.async_abort(reason="no_homes_found")
 
                 if self._reauth_entry:
                     self.hass.config_entries.async_update_entry(
@@ -183,9 +206,12 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 _LOGGER.error("DomoLink-Tado: Error during Tado token polling/login: %s", err)
                 if "429" in str(err) or "Rate Limit" in str(err) or "saturé" in str(err):
                     errors["base"] = "rate_limit"
+                    # Si les tokens OAuth sont déjà en mémoire mais que /me est bloqué :
+                    # Basculer immédiatement vers la saisie manuelle du Home ID pour débloquer l'utilisateur
+                    if self._tokens:
+                        return await self.async_step_manual_home()
                 else:
                     errors["base"] = "cannot_connect"
-                # Si le token a déjà été reçu mais que /me a été rate-limited, self._tokens reste conservé !
             except Exception as err:
                 _LOGGER.exception("DomoLink-Tado: Unexpected error during Tado login: %s", err)
                 errors["base"] = "unknown"
@@ -211,8 +237,84 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 "user_code": self._user_code or "",
                 "verification_uri": link,
             },
-            data_schema=vol.Schema({}),
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(CONF_HOME_ID): vol.Coerce(int),
+                }
+            ),
             errors=errors,
+        )
+
+    async def async_step_manual_home(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Allow manual entry of Home ID when Tado /me is rate-limited."""
+        errors: dict[str, str] = {}
+
+        if user_input is not None:
+            raw_id = user_input.get(CONF_HOME_ID)
+            try:
+                home_id = int(str(raw_id).strip())
+                if home_id <= 0:
+                    raise ValueError
+            except (ValueError, TypeError):
+                errors["base"] = "invalid_home_id"
+            else:
+                home_name = str(user_input.get(CONF_HOME_NAME, "Maison Tado")).strip() or "Maison Tado"
+
+                tokens = self._tokens or {}
+                if self._reauth_entry:
+                    self.hass.config_entries.async_update_entry(
+                        self._reauth_entry,
+                        data={
+                            **self._reauth_entry.data,
+                            CONF_ACCESS_TOKEN: tokens.get("access_token", ""),
+                            CONF_REFRESH_TOKEN: tokens.get("refresh_token"),
+                            CONF_EXPIRES_AT: tokens.get("expires_at", time.time() + 3600),
+                        },
+                    )
+                    await self.hass.config_entries.async_reload(self._reauth_entry.entry_id)
+                    return self.async_abort(reason="reauth_successful")
+
+                await self.async_set_unique_id(str(home_id))
+                self._abort_if_unique_id_configured()
+
+                self._home_id = home_id
+                self._home_name = home_name
+
+                return self.async_create_entry(
+                    title=f"DomoLink Tado ({home_name})",
+                    data={
+                        CONF_HOME_ID: home_id,
+                        CONF_HOME_NAME: home_name,
+                        CONF_ACCESS_TOKEN: tokens.get("access_token", ""),
+                        CONF_REFRESH_TOKEN: tokens.get("refresh_token"),
+                        CONF_EXPIRES_AT: tokens.get("expires_at", time.time() + 3600),
+                    },
+                    options={
+                        CONF_ROOM_LABELS: {},
+                        CONF_OVERLAY_MODE: DEFAULT_OVERLAY_MODE,
+                        CONF_OVERLAY_DURATION: DEFAULT_OVERLAY_DURATION,
+                        CONF_AUTO_WINDOW_ENABLED: DEFAULT_AUTO_WINDOW_ENABLED,
+                        CONF_AUTO_WINDOW_DURATION: DEFAULT_AUTO_WINDOW_DURATION,
+                        CONF_ECO_TEMP: DEFAULT_ECO_TEMP,
+                        CONF_ADAPTIVE_POLLING: DEFAULT_ADAPTIVE_POLLING,
+                    },
+                )
+
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_HOME_ID): int,
+                vol.Optional(CONF_HOME_NAME, default="Maison Tado"): str,
+            }
+        )
+        return self.async_show_form(
+            step_id="manual_home",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "tado_url": "https://my.tado.com/webapp/",
+            },
         )
 
     async def async_step_labels(self, user_input: dict[str, Any] | None = None) -> FlowResult:
