@@ -118,17 +118,17 @@ class DomolinkTadoZoneResumeScheduleButton(CoordinatorEntity[DomolinkTadoCoordin
         super().__init__(coordinator)
         self.zone_id = zone_id
         self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{zone_id}_resume_schedule"
-        self._attr_name = f"{self._zone_data.get("name", "Zone")} Reprendre Programmation"
+        self._attr_name = f"{self._zone_data.get('name', 'Zone')} Reprendre Programmation"
 
     @property
     def _zone_data(self) -> dict[str, Any]:
-        return self.coordinator.data.get("zones", {}).get(self.zone_id, {})
+        return (self.coordinator.data or {}).get("zones", {}).get(self.zone_id, {})
 
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_{self.zone_id}")},
-            name=f"Tado {self._zone_data.get("name", "Zone")}",
+            name=f"Tado {self._zone_data.get('name', 'Zone')}",
             manufacturer="Tado (DomoLink)",
             suggested_area=self._zone_data.get("name"),
         )
@@ -147,17 +147,17 @@ class DomolinkTadoZoneBoostButton(CoordinatorEntity[DomolinkTadoCoordinator], Bu
         super().__init__(coordinator)
         self.zone_id = zone_id
         self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{zone_id}_smart_boost"
-        self._attr_name = f"{self._zone_data.get("name", "Zone")} Boost Intelligent"
+        self._attr_name = f"{self._zone_data.get('name', 'Zone')} Boost Intelligent"
 
     @property
     def _zone_data(self) -> dict[str, Any]:
-        return self.coordinator.data.get("zones", {}).get(self.zone_id, {})
+        return (self.coordinator.data or {}).get("zones", {}).get(self.zone_id, {})
 
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_{self.zone_id}")},
-            name=f"Tado {self._zone_data.get("name", "Zone")}",
+            name=f"Tado {self._zone_data.get('name', 'Zone')}",
             manufacturer="Tado (DomoLink)",
             suggested_area=self._zone_data.get("name"),
         )

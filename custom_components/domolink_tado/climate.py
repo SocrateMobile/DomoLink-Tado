@@ -41,7 +41,7 @@ async def async_setup_entry(
     coordinator: DomolinkTadoCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
     entities: list[DomolinkTadoClimate] = []
-    zones = coordinator.data.get("zones", {})
+    zones = (coordinator.data or {}).get("zones", {})
 
     for zone_id, zone_data in zones.items():
         if zone_data.get("type") in ("HEATING", "AIR_CONDITIONING"):
@@ -74,7 +74,7 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
     @property
     def _zone_data(self) -> dict[str, Any]:
         """Return cached data for this zone from coordinator."""
-        return self.coordinator.data.get("zones", {}).get(self.zone_id, {})
+        return (self.coordinator.data or {}).get("zones", {}).get(self.zone_id, {})
 
     @property
     def is_ac(self) -> bool:
@@ -144,7 +144,7 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information for Home Assistant registry."""
-        devices = self._zone_data.get("devices", [])
+        devices = self._zone_data.get("devices") or []
         primary_serial = devices[0].get("serialNo") if devices else f"zone_{self.zone_id}"
         default_model = "Smart AC Control" if self.is_ac else "Smart Radiator Valve"
         model = devices[0].get("deviceType", default_model) if devices else default_model
@@ -207,7 +207,7 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
             return HVACAction.OFF
 
         if not self.is_ac:
-            heating_power = self._zone_data.get("heating_power", 0.0)
+            heating_power = float(self._zone_data.get("heating_power") or 0.0)
             if heating_power > 0:
                 return HVACAction.HEATING
             return HVACAction.IDLE
@@ -243,15 +243,15 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return extra state attributes."""
         z = self._zone_data
-        devs = z.get("devices", [])
+        devs = z.get("devices") or []
         primary_type = (devs[0].get("deviceType") or devs[0].get("type") or "VA01") if devs else "VA01"
         attrs: dict[str, Any] = {
             "zone_id": self.zone_id,
             "zone_type": z.get("type", "HEATING"),
-            "heating_power_percentage": z.get("heating_power", 0.0),
+            "heating_power_percentage": float(z.get("heating_power") or 0.0),
             "is_overlay_active": z.get("is_overlay_active", False),
             "open_window_detected": z.get("open_window", False),
-            "tado_mode": z.get("state", {}).get("tadoMode"),
+            "tado_mode": (z.get("state") or {}).get("tadoMode"),
             "device_type": primary_type,
             "labels": self.coordinator.get_zone_labels(self.zone_id),
             "devices": [
@@ -261,7 +261,7 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
                     "device_type": d.get("deviceType") or d.get("type") or "VA01",
                     "battery": d.get("batteryState") or d.get("battery") or "NORMAL",
                     "battery_state": d.get("batteryState") or d.get("battery") or "NORMAL",
-                    "battery_percentage": d.get("batteryPercentage") or (100 if (d.get("batteryState") or d.get("battery")) == "NORMAL" else 20),
+                    "battery_percentage": d.get("batteryPercentage") if d.get("batteryPercentage") is not None else (100 if (d.get("batteryState") or d.get("battery")) == "NORMAL" else 20),
                     "connection_state": d.get("connectionState", {}).get("value") if isinstance(d.get("connectionState"), dict) else (d.get("connectionState") or "CONNECTED"),
                     "firmware": d.get("currentFirmwareVersion") or d.get("firmware") or "v98.1",
                     "child_lock": d.get("childLockEnabled") or d.get("child_lock") or False,
@@ -283,6 +283,10 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         """Set new target temperature."""
+        # m-7: Support hvac_mode in kwargs (HA convention for combined mode+temp)
+        if "hvac_mode" in kwargs:
+            await self.async_set_hvac_mode(kwargs["hvac_mode"])
+
         temp = kwargs.get("temperature")
         if temp is None:
             return
@@ -292,6 +296,9 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
 
         if self.is_ac:
             curr_mode = self._zone_data.get("ac_mode") or "COOL"
+            # M-14: FAN mode n'accepte pas de température → basculer en COOL
+            if curr_mode == "FAN":
+                curr_mode = "COOL"
             await self.coordinator.async_set_ac_mode(
                 zone_id=self.zone_id,
                 mode=curr_mode,
@@ -360,7 +367,7 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
         await self.coordinator.async_set_ac_mode(
             zone_id=self.zone_id,
             mode=curr_mode,
-            target_temp=target,
+            target_temp=target if curr_mode != "FAN" else None,
             fan_speed=fan_mode.upper(),
             swing=self.swing_mode.upper() if self.swing_mode else "OFF",
             termination_type=overlay_mode,
@@ -380,7 +387,7 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
         await self.coordinator.async_set_ac_mode(
             zone_id=self.zone_id,
             mode=curr_mode,
-            target_temp=target,
+            target_temp=target if curr_mode != "FAN" else None,
             fan_speed=self.fan_mode.upper() if self.fan_mode else "AUTO",
             swing=swing_mode.upper(),
             termination_type=overlay_mode,

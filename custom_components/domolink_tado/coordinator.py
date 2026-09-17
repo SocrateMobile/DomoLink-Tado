@@ -114,6 +114,17 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_schedule_fetch_time: dict[int, float] = {}
         self._preheat_triggered: dict[int, bool] = {}
         self._last_offset_update_time: dict[str, float] = {}
+        self._consecutive_failures: int = 0
+
+    def _create_safe_task(self, coro: Coroutine[Any, Any, Any], task_name: str = "tado_task") -> asyncio.Task[Any]:
+        """Create a background task with error logging to avoid unretrieved exceptions."""
+        async def _wrapper() -> None:
+            try:
+                await coro
+            except Exception as err:
+                _LOGGER.warning("DomoLink-Tado: Erreur dans la tâche d'arrière-plan %s: %s", task_name, err)
+
+        return self.hass.async_create_task(_wrapper())
 
     def get_zone_labels(self, zone_id: int | str) -> list[str]:
         """Return configured labels for a given zone ID."""
@@ -180,7 +191,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._last_discovery_time = now
                 except Exception as err:
                     _LOGGER.warning("DomoLink-Tado: Échec rafraîchissement zones/matériels (%s), utilisation cache", err)
-                    if not self._zones_raw:
+                    if not self._zones_raw or not self._devices_raw:
                         raise
 
             # 2. En routine : rafraîchir uniquement les états dynamiques de zones (1 seule requête API !)
@@ -225,6 +236,27 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             preheat_enabled = self.entry.options.get(CONF_PREHEAT_ENABLED, DEFAULT_PREHEAT_ENABLED)
             preheat_mode = self.entry.options.get(CONF_PREHEAT_MODE, DEFAULT_PREHEAT_MODE)
             max_preheat_dur = self.entry.options.get(CONF_PREHEAT_MAX_DURATION, DEFAULT_PREHEAT_MAX_DURATION)
+
+            # M-6: Pré-chargement asynchrone et concurrent des plannings si préchauffe active
+            if preheat_enabled:
+                zones_needing_sched = [
+                    z.get("id") for z in self._zones_raw
+                    if z.get("id") is not None
+                    and (not self._zone_schedules_raw.get(z.get("id")) or (now - self._last_schedule_fetch_time.get(z.get("id"), 0.0) > 21600))
+                ]
+                if zones_needing_sched:
+                    async def _fetch_zone_sched(zone_id: int) -> None:
+                        try:
+                            active_tt = await self.client.get_active_timetable(self.home_id, zone_id)
+                            if active_tt and "id" in active_tt:
+                                blocks = await self.client.get_timetable_blocks(self.home_id, zone_id, active_tt["id"])
+                                if blocks is not None:
+                                    self._zone_schedules_raw[zone_id] = blocks
+                                    self._last_schedule_fetch_time[zone_id] = now
+                        except Exception as err:
+                            _LOGGER.debug("DomoLink-Tado: Impossible de charger le planning pour la zone %s: %s", zone_id, err)
+
+                    await asyncio.gather(*[_fetch_zone_sched(zid) for zid in zones_needing_sched], return_exceptions=True)
 
             for z in self._zones_raw:
                 zid = z.get("id")
@@ -331,8 +363,9 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     new_offset,
                                     temp_diff,
                                 )
-                                self.hass.async_create_task(
-                                    self.async_set_temperature_offset(serial, new_offset)
+                                self._create_safe_task(
+                                    self.async_set_temperature_offset(serial, new_offset, refresh=False),
+                                    task_name=f"offset_{serial}",
                                 )
 
                 # Extract target setting & overlay
@@ -465,12 +498,13 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                             sched_target,
                                             preheat_duration,
                                         )
-                                        self.hass.async_create_task(
+                                        self._create_safe_task(
                                             self.async_set_temperature(
                                                 zid,
                                                 target_temp=sched_target,
                                                 termination_type=OVERLAY_NEXT_TIME_BLOCK,
-                                            )
+                                            ),
+                                            task_name=f"preheat_{zid}",
                                         )
                                 elif not preheat_now:
                                     self._preheat_triggered[zid] = False
@@ -541,6 +575,9 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             presence_val = home_state.get("presence", "HOME")
             self._check_automated_geofencing(presence_val)
 
+            # Succès : réinitialiser le compteur d'échecs consécutifs
+            self._consecutive_failures = 0
+
             return {
                 "home_id": self.home_id,
                 "home_name": self.home_name,
@@ -566,13 +603,15 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.error("Erreur d'authentification auprès de Tado: %s", err)
             raise ConfigEntryAuthFailed(f"Session Tado expirée: {err}") from err
         except (TadoError, aiohttp.ClientError, TimeoutError, asyncio.TimeoutError) as err:
-            if self.data:
+            self._consecutive_failures += 1
+            if self.data and self._consecutive_failures <= 3:
                 _LOGGER.warning(
-                    "Erreur transitoire de communication avec Tado (%s). Conservation des dernières valeurs connues en cache.",
+                    "Erreur transitoire de communication avec Tado (%s). Conservation des dernières valeurs connues en cache (%d/3).",
                     err,
+                    self._consecutive_failures,
                 )
                 return self.data
-            raise UpdateFailed(f"Erreur de communication Tado: {err}") from err
+            raise UpdateFailed(f"Erreur de communication Tado ({self._consecutive_failures} échecs consécutifs): {err}") from err
         except Exception as err:
             _LOGGER.exception("Erreur inattendue lors de la mise à jour DomoLink-Tado: %s", err)
             raise UpdateFailed(f"Erreur inattendue: {err}") from err
@@ -615,6 +654,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         coro: Coroutine[Any, Any, Any],
     ) -> None:
         """Apply optimistic update to a zone with automatic rollback if the API call fails."""
+        original_data = self.data
         has_zone = bool(self.data and "zones" in self.data and zone_id in self.data["zones"])
         backup_state: dict[str, Any] | None = None
 
@@ -626,14 +666,16 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         try:
             await coro
         except Exception as err:
+            # M-4: Ne restaurer le backup QUE si self.data n'a pas été remplacé par un rafraîchissement d'arrière-plan
             if has_zone and backup_state is not None:
                 _LOGGER.warning(
                     "DomoLink-Tado: Échec de la commande sur la zone %s (%s). Annulation de la mise à jour optimiste.",
                     zone_id,
                     err,
                 )
-                self.data["zones"][zone_id].update(backup_state)
-                self.async_set_updated_data(self.data)
+                if self.data is original_data and "zones" in self.data and zone_id in self.data["zones"]:
+                    self.data["zones"][zone_id].update(backup_state)
+                    self.async_set_updated_data(self.data)
             raise
 
     async def _async_execute_all_zones(
@@ -654,6 +696,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return
 
         # 1. Sauvegarde et mise à jour optimiste immédiate en mémoire
+        original_data = self.data
         backup: dict[int, dict[str, Any]] = {
             zid: dict(self.data["zones"][zid]) for zid in zone_ids if zid in self.data["zones"]
         }
@@ -673,13 +716,14 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except Exception as err:
                     _LOGGER.warning("DomoLink-Tado: Erreur lors de %s pour la zone %s: %s", action_name, zid, err)
                     failed_zones.append(zid)
-                    if zid in backup:
+                    # M-4: Ne restaurer QUE si self.data n'a pas été remplacé par un rafraîchissement global
+                    if self.data is original_data and zid in backup and zid in self.data.get("zones", {}):
                         self.data["zones"][zid].update(backup[zid])
 
         await asyncio.gather(*[_worker(zid) for zid in zone_ids])
 
         # Rafraîchir les données en cas de rollback partiel
-        if failed_zones:
+        if failed_zones and self.data is original_data:
             self.async_set_updated_data(self.data)
 
     async def async_set_temperature(
@@ -951,7 +995,10 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "DomoLink-Tado: Geofencing automatique HA -> bascule de présence vers %s",
                     target_state,
                 )
-                self.hass.async_create_task(self.async_set_presence(target_home))
+                self._create_safe_task(
+                    self.async_set_presence(target_home),
+                    task_name="geofencing_set_presence",
+                )
 
     async def async_smart_boost(
         self,
@@ -1047,10 +1094,13 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 zone_id, target_temp=temp, termination_type=OVERLAY_NEXT_TIME_BLOCK
             )
 
-    async def async_set_temperature_offset(self, device_serial: str, offset: float) -> None:
+    async def async_set_temperature_offset(
+        self, device_serial: str, offset: float, refresh: bool = True
+    ) -> None:
         """Set calibration offset on a device."""
         await self.client.set_temperature_offset(device_serial, offset)
-        await self.async_request_refresh()
+        if refresh:
+            await self.async_request_refresh()
 
     async def async_save_room_labels(self, labels_dict: dict[str, Any]) -> None:
         """Save room labels to config entry options."""

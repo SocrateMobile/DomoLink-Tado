@@ -326,44 +326,51 @@ class TadoClient:
 
         _LOGGER.debug("Refreshing Tado OAuth token...")
         for attempt in range(4):
+            _rate_limit_wait: float | None = None
             try:
                 async with self.session.post(TADO_TOKEN_URL, data=data, headers=headers) as resp:
                     if resp.status == 429:
-                        wait_sec = self._calculate_rate_limit_delay(resp, attempt, default_base=3.0, max_delay=30.0)
+                        _rate_limit_wait = self._calculate_rate_limit_delay(resp, attempt, default_base=3.0, max_delay=30.0)
                         _LOGGER.warning(
                             "Tado token refresh rate limited (429). Retrying in %.1fs (attempt %d/4)...",
-                            wait_sec,
+                            _rate_limit_wait,
                             attempt + 1,
                         )
-                        await asyncio.sleep(wait_sec)
-                        continue
-
-                    if resp.status != 200:
+                        # Connexion libérée en sortant du async with AVANT le sleep
+                    elif resp.status != 200:
                         text = await resp.text()
                         _LOGGER.error("Failed to refresh Tado token (%s): %s", resp.status, text)
                         raise TadoAuthError(f"Token refresh failed ({resp.status}): {text}")
-
-                    res = await resp.json()
-                    self.access_token = res["access_token"]
-                    self.refresh_token = res.get("refresh_token", self.refresh_token)
-                    self.expires_at = time.time() + res.get("expires_in", 3600)
-
-                    _LOGGER.info("Tado OAuth token refreshed successfully (valid for %ss)", res.get("expires_in"))
-
-                    # Persist directly to Home Assistant config entry storage!
-                    if self.token_update_callback:
+                    else:
                         try:
-                            await self.token_update_callback(
-                                {
-                                    "access_token": self.access_token,
-                                    "refresh_token": self.refresh_token,
-                                    "expires_at": self.expires_at,
-                                }
-                            )
-                        except Exception as err:
-                            _LOGGER.warning("Could not persist refreshed token to config entry: %s", err)
+                            res = await resp.json()
+                        except (ValueError, aiohttp.ContentTypeError) as parse_err:
+                            raise TadoError(f"Token refresh: invalid JSON response: {parse_err}") from parse_err
+                        self.access_token = res["access_token"]
+                        self.refresh_token = res.get("refresh_token", self.refresh_token)
+                        self.expires_at = time.time() + res.get("expires_in", 3600)
 
-                    return self.access_token
+                        _LOGGER.info("Tado OAuth token refreshed successfully (valid for %ss)", res.get("expires_in"))
+
+                        # Persist directly to Home Assistant config entry storage!
+                        if self.token_update_callback:
+                            try:
+                                await self.token_update_callback(
+                                    {
+                                        "access_token": self.access_token,
+                                        "refresh_token": self.refresh_token,
+                                        "expires_at": self.expires_at,
+                                    }
+                                )
+                            except Exception as err:
+                                _LOGGER.warning("Could not persist refreshed token to config entry: %s", err)
+
+                        return self.access_token
+
+                # Sleep APRÈS la libération de la connexion (hors du async with)
+                if _rate_limit_wait is not None:
+                    await asyncio.sleep(_rate_limit_wait)
+                    continue
             except aiohttp.ClientError as err:
                 if attempt < 3:
                     await asyncio.sleep(2.0 * (attempt + 1))
@@ -390,6 +397,7 @@ class TadoClient:
         }
 
         for attempt in range(5):
+            _rate_limit_wait: float | None = None
             try:
                 async with self.session.request(
                     method, url, json=json_data, params=params, headers=headers
@@ -398,34 +406,49 @@ class TadoClient:
                     if resp.status == 429:
                         policy = resp.headers.get("RateLimit-Policy", "")
                         rl = resp.headers.get("RateLimit", "")
-                        wait_sec = self._calculate_rate_limit_delay(resp, attempt, default_base=2.5, max_delay=30.0)
+                        _rate_limit_wait = self._calculate_rate_limit_delay(resp, attempt, default_base=2.5, max_delay=30.0)
                         _LOGGER.warning(
                             "Tado API Rate Limit (429) sur %s (policy=%s, limit=%s). Attente de %.1fs (tentative %d/5)...",
                             endpoint,
                             policy or "N/A",
                             rl or "N/A",
-                            wait_sec,
+                            _rate_limit_wait,
                             attempt + 1,
                         )
-                        await asyncio.sleep(wait_sec)
-                        continue
+                        # Connexion libérée en sortant du async with AVANT le sleep
 
-                    if resp.status == 401 and retry_auth:
+                    elif resp.status == 401 and retry_auth:
                         _LOGGER.warning("Received 401 Unauthorized from Tado API, forcing token refresh...")
-                        await self.async_refresh_token()
-                        return await self._request(
-                            method, endpoint, json_data=json_data, params=params, retry_auth=False
-                        )
+                        # Sortir du async with AVANT le refresh + retry (évite M-2: récursion dans connexion ouverte)
 
-                    if resp.status == 204:
+                    elif resp.status == 204:
                         return {}
 
-                    if resp.status not in (200, 201):
+                    elif resp.status not in (200, 201):
                         text = await resp.text()
                         raise TadoError(f"API request to {endpoint} failed ({resp.status}): {text}")
 
-                    data = await resp.json()
-                    return data if data is not None else {}
+                    else:
+                        try:
+                            data = await resp.json()
+                        except (ValueError, aiohttp.ContentTypeError) as parse_err:
+                            raise TadoError(f"API request to {endpoint}: invalid JSON response: {parse_err}") from parse_err
+                        return data if data is not None else {}
+
+                # Actions APRÈS libération de la connexion (hors du async with)
+                if _rate_limit_wait is not None:
+                    await asyncio.sleep(_rate_limit_wait)
+                    continue
+
+                if resp.status == 401 and retry_auth:
+                    # M-1 fix: utiliser async_get_valid_token (protégé par lock) au lieu d'appel direct
+                    self.expires_at = 0  # Invalider le token pour forcer un refresh
+                    token = await self.async_get_valid_token()
+                    headers["Authorization"] = f"Bearer {token}"
+                    return await self._request(
+                        method, endpoint, json_data=json_data, params=params, retry_auth=False
+                    )
+
             except aiohttp.ClientError as err:
                 if attempt < 4:
                     await asyncio.sleep(2.0 * (attempt + 1))
@@ -506,7 +529,7 @@ class TadoClient:
             termination["typeSkillBasedApp"] = "MANUAL"
         elif termination_type == OVERLAY_TIMER:
             termination["typeSkillBasedApp"] = "TIMER"
-            termination["durationInSeconds"] = int(duration_seconds or 3600)
+            termination["durationInSeconds"] = int(duration_seconds if duration_seconds is not None else 3600)
         else:
             termination["typeSkillBasedApp"] = "NEXT_TIME_BLOCK"
 
@@ -531,7 +554,10 @@ class TadoClient:
     async def resume_all_schedules(self, home_id: int, zone_ids: list[int]) -> None:
         """Resume automatic schedule across all specified zones."""
         tasks = [self.resume_schedule(home_id, zid) for zid in zone_ids]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        errors = [r for r in results if isinstance(r, Exception)]
+        if errors:
+            _LOGGER.warning("DomoLink-Tado: %d/%d erreurs lors de la reprise des plannings: %s", len(errors), len(tasks), errors[0])
 
     async def set_all_off(self, home_id: int, zone_ids: list[int]) -> None:
         """Turn off heating across all specified zones."""
@@ -544,7 +570,10 @@ class TadoClient:
             )
             for zid in zone_ids
         ]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        errors = [r for r in results if isinstance(r, Exception)]
+        if errors:
+            _LOGGER.warning("DomoLink-Tado: %d/%d erreurs lors de l'arrêt groupé: %s", len(errors), len(tasks), errors[0])
 
     async def set_boost(
         self,
@@ -565,7 +594,10 @@ class TadoClient:
             )
             for zid in zone_ids
         ]
-        await asyncio.gather(*tasks, return_exceptions=True)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        errors = [r for r in results if isinstance(r, Exception)]
+        if errors:
+            _LOGGER.warning("DomoLink-Tado: %d/%d erreurs lors du boost groupé: %s", len(errors), len(tasks), errors[0])
 
     async def set_child_lock(self, device_serial: str, child_lock: bool) -> dict[str, Any]:
         """Enable or disable physical child lock on a radiator valve."""

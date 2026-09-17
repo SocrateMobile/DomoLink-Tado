@@ -57,17 +57,17 @@ class DomolinkTadoWaterHeater(CoordinatorEntity[DomolinkTadoCoordinator], WaterH
         super().__init__(coordinator)
         self.zone_id = zone_id
         self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{zone_id}_water_heater"
-        self._attr_name = f"{self._zone_data.get("name", "Eau Chaude")} Chauffe-eau"
+        self._attr_name = f"{self._zone_data.get('name', 'Eau Chaude')} Chauffe-eau"
 
     @property
     def _zone_data(self) -> dict[str, Any]:
-        return self.coordinator.data.get("zones", {}).get(self.zone_id, {})
+        return (self.coordinator.data or {}).get("zones", {}).get(self.zone_id, {})
 
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_{self.zone_id}")},
-            name=f"Tado {self._zone_data.get("name", "Eau Chaude")}",
+            name=f"Tado {self._zone_data.get('name', 'Eau Chaude')}",
             manufacturer="Tado (DomoLink)",
             suggested_area=self._zone_data.get("name"),
         )
