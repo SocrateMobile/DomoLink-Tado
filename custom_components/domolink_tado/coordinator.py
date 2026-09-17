@@ -228,10 +228,10 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "labels": room_labels,
                 }
 
-            # Polling adaptatif : 15s si chauffe active, 60s si tout est en veille
+            # Polling adaptatif : 60s si chauffe active, 300s (5 min) si tout est au repos (respect quota Tado)
             adaptive = self.entry.options.get(CONF_ADAPTIVE_POLLING, True)
             if adaptive:
-                new_interval = 15 if (active_heating_count > 0 or any(zd.get("is_overlay_active") for zd in zones_data.values())) else 60
+                new_interval = 60 if (active_heating_count > 0 or any(zd.get("is_overlay_active") for zd in zones_data.values())) else 300
                 if self.update_interval != timedelta(seconds=new_interval):
                     self.update_interval = timedelta(seconds=new_interval)
 

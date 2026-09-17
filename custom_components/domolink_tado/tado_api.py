@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 import logging
+import re
 import time
 from typing import Any, Callable, Coroutine
 
@@ -22,7 +23,8 @@ from .const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-DEFAULT_USER_AGENT = f"HomeAssistant/{VERSION} DomoLink-Tado"
+DEFAULT_USER_AGENT = "PyTado/0.18.16"
+DEFAULT_REFERER = "https://app.tado.com/"
 
 
 class TadoError(Exception):
@@ -80,6 +82,7 @@ class TadoClient:
         }
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": DEFAULT_REFERER,
             "User-Agent": DEFAULT_USER_AGENT,
         }
 
@@ -119,6 +122,7 @@ class TadoClient:
         }
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": DEFAULT_REFERER,
             "User-Agent": DEFAULT_USER_AGENT,
         }
 
@@ -188,16 +192,37 @@ class TadoClient:
         default_base: float = 2.5,
         max_delay: float = 30.0,
     ) -> float:
-        """Extract Retry-After or RateLimit-Reset headers, fallback to exponential backoff."""
+        """Extract Retry-After or RateLimit headers from Tado, fallback to exponential backoff."""
         wait_sec: float | None = None
-        for hdr in ("Retry-After", "RateLimit-Reset", "X-RateLimit-Reset"):
+        for hdr in (
+            "Retry-After",
+            "ratelimit-reset",
+            "RateLimit-Reset",
+            "X-RateLimit-Reset",
+            "ratelimit",
+            "RateLimit",
+        ):
             val = resp.headers.get(hdr)
-            if val:
+            if not val:
+                continue
+            # Match t=XXX in ratelimit header (ex: '"perday";r=0;t=120')
+            m = re.search(r"t=([0-9]+(?:\.[0-9]+)?)", val)
+            if m:
                 try:
-                    wait_sec = float(val)
+                    wait_sec = float(m.group(1))
                     break
                 except (ValueError, TypeError):
                     pass
+            try:
+                f_val = float(val)
+                if f_val > 1000000000:
+                    wait_sec = max(1.0, f_val - time.time())
+                else:
+                    wait_sec = f_val
+                break
+            except (ValueError, TypeError):
+                pass
+
         if wait_sec is None or wait_sec <= 0:
             wait_sec = default_base * (2 ** attempt)
         return min(wait_sec, max_delay)
@@ -214,6 +239,7 @@ class TadoClient:
         }
         headers = {
             "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": DEFAULT_REFERER,
             "User-Agent": DEFAULT_USER_AGENT,
         }
 
@@ -278,6 +304,7 @@ class TadoClient:
         headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
+            "Referer": DEFAULT_REFERER,
             "User-Agent": DEFAULT_USER_AGENT,
         }
 
@@ -287,10 +314,14 @@ class TadoClient:
                     method, url, json=json_data, params=params, headers=headers
                 ) as resp:
                     if resp.status == 429:
+                        policy = resp.headers.get("RateLimit-Policy", "")
+                        rl = resp.headers.get("RateLimit", "")
                         wait_sec = self._calculate_rate_limit_delay(resp, attempt, default_base=2.5, max_delay=30.0)
                         _LOGGER.warning(
-                            "Tado API Rate Limit (429 Too Many Requests) sur %s. Attente de %.1fs (tentative %d/5)...",
+                            "Tado API Rate Limit (429) sur %s (policy=%s, limit=%s). Attente de %.1fs (tentative %d/5)...",
                             endpoint,
+                            policy or "N/A",
+                            rl or "N/A",
                             wait_sec,
                             attempt + 1,
                         )
