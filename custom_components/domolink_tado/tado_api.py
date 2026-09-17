@@ -126,10 +126,20 @@ class TadoClient:
             async with session.post(TADO_TOKEN_URL, data=data, headers=headers) as resp:
                 if resp.status == 200:
                     res = await resp.json()
+                    access_token = res.get("access_token")
+                    if not access_token:
+                        raise TadoAuthError("La réponse Tado ne contient pas de jeton d'accès valide (access_token manquant).")
+
+                    expires_in = res.get("expires_in")
+                    try:
+                        expires_sec = float(expires_in) if expires_in is not None else 3600.0
+                    except (ValueError, TypeError):
+                        expires_sec = 3600.0
+
                     return {
-                        "access_token": res["access_token"],
+                        "access_token": access_token,
                         "refresh_token": res.get("refresh_token"),
-                        "expires_at": time.time() + res.get("expires_in", 3600),
+                        "expires_at": time.time() + expires_sec,
                     }
 
                 if resp.status == 429:
