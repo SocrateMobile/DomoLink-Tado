@@ -5,9 +5,6 @@ import logging
 from typing import Any
 
 from homeassistant.components.water_heater import (
-    STATE_AUTO,
-    STATE_HEAT,
-    STATE_OFF,
     WaterHeaterEntity,
     WaterHeaterEntityFeature,
 )
@@ -23,7 +20,17 @@ from .coordinator import DomolinkTadoCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
-SUPPORTED_OPERATIONS = [STATE_AUTO, STATE_HEAT, STATE_OFF]
+# Modes de fonctionnement d'eau chaude sanitaire (alignés sur l'intégration Tado officielle)
+MODE_AUTO = "auto"
+MODE_HEAT = "heat"
+MODE_OFF = "off"
+
+# Alias rétrocompatibles
+STATE_AUTO = MODE_AUTO
+STATE_HEAT = MODE_HEAT
+STATE_OFF = MODE_OFF
+
+SUPPORTED_OPERATIONS = [MODE_AUTO, MODE_HEAT, MODE_OFF]
 
 
 async def async_setup_entry(
@@ -35,7 +42,7 @@ async def async_setup_entry(
     coordinator: DomolinkTadoCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
     entities: list[DomolinkTadoWaterHeater] = []
-    zones = coordinator.data.get("zones", {})
+    zones = (coordinator.data or {}).get("zones", {})
 
     for zone_id, zone_data in zones.items():
         if zone_data.get("type") in ("HOT_WATER", "DOMESTIC_HOT_WATER"):
