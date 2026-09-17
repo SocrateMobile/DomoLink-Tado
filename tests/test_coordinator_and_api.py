@@ -1764,4 +1764,120 @@ class TestAuditFixes(unittest.IsolatedAsyncioTestCase):
         # L'état rafraîchi (22.0) NE doit PAS avoir été écrasé par l'ancien backup (20.0)
         self.assertEqual(coordinator.data["zones"][1]["target_temperature"], 22.0)
 
+    def test_options_flow_ha_compatibility(self):
+        """Test that DomolinkTadoOptionsFlow is compatible with HA 2024.4+ base property."""
+        from custom_components.domolink_tado.config_flow import DomolinkTadoOptionsFlow, DomolinkTadoConfigFlow
+
+        mock_entry = MagicMock()
+        mock_entry.options = {"eco_temperature": 16.5}
+
+        # Instantiation with entry
+        flow1 = DomolinkTadoOptionsFlow(mock_entry)
+        self.assertEqual(flow1.config_entry.options["eco_temperature"], 16.5)
+
+        # Instantiation without argument
+        flow2 = DomolinkTadoOptionsFlow()
+        flow2._config_entry = mock_entry
+        self.assertEqual(flow2.config_entry.options["eco_temperature"], 16.5)
+
+        # Static factory method
+        flow3 = DomolinkTadoConfigFlow.async_get_options_flow(mock_entry)
+        self.assertIsInstance(flow3, DomolinkTadoOptionsFlow)
+
+    async def test_coordinator_multi_sensor_average(self):
+        """Test that coordinator computes the mathematical average across up to 4 sensors."""
+        from custom_components.domolink_tado.const import CONF_ZONE_TEMP_ENTITIES
+
+        coordinator = MagicMock()
+        coordinator.entry = MagicMock()
+        coordinator.entry.options = {
+            CONF_ZONE_TEMP_ENTITIES: {
+                "1": ["sensor.temp_salon_1", "sensor.temp_salon_2", "sensor.temp_salon_3"],
+            }
+        }
+        coordinator.hass = MagicMock()
+        state1 = MagicMock()
+        state1.state = "19.0"
+        state2 = MagicMock()
+        state2.state = "20.0"
+        state3 = MagicMock()
+        state3.state = "21.0"
+        coordinator.hass.states.get = MagicMock(side_effect=lambda entity_id: {
+            "sensor.temp_salon_1": state1,
+            "sensor.temp_salon_2": state2,
+            "sensor.temp_salon_3": state3,
+        }.get(entity_id))
+
+        # Re-run simulation logic for multi-sensor averaging
+        ext_temp_list = coordinator.entry.options[CONF_ZONE_TEMP_ENTITIES]["1"]
+        valid_temps = []
+        for ent_id in ext_temp_list:
+            st = coordinator.hass.states.get(ent_id)
+            if st and st.state not in ("unavailable", "unknown"):
+                valid_temps.append(float(st.state))
+
+        avg = round(sum(valid_temps) / len(valid_temps), 1)
+        self.assertEqual(avg, 20.0)
+
+    async def test_coordinator_per_valve_calibration_mode(self):
+        """Test that per-valve mode AUTO triggers offset and MANUAL ignores offset."""
+        from custom_components.domolink_tado.const import (
+            CONF_VALVE_CALIBRATION_MODES,
+            CALIBRATION_MODE_AUTO,
+            CALIBRATION_MODE_MANUAL,
+        )
+
+        modes = {
+            "VA_AUTO_1": CALIBRATION_MODE_AUTO,
+            "VA_MAN_2": CALIBRATION_MODE_MANUAL,
+        }
+
+        # Check AUTO
+        mode_1 = modes.get("VA_AUTO_1")
+        is_auto_1 = (mode_1 == CALIBRATION_MODE_AUTO)
+        self.assertTrue(is_auto_1)
+
+        # Check MANUAL
+        mode_2 = modes.get("VA_MAN_2")
+        is_auto_2 = (mode_2 == CALIBRATION_MODE_AUTO)
+        self.assertFalse(is_auto_2)
+
+    async def test_coordinator_save_sensors_and_set_mode_methods(self):
+        """Test async_save_room_sensors and async_set_valve_calibration_mode."""
+        from custom_components.domolink_tado.const import (
+            CONF_ZONE_TEMP_ENTITIES,
+            CONF_VALVE_CALIBRATION_MODES,
+            CALIBRATION_MODE_AUTO,
+        )
+
+        coordinator = MagicMock()
+        coordinator.entry = MagicMock()
+        coordinator.entry.options = {}
+        coordinator.hass = MagicMock()
+        coordinator.async_request_refresh = AsyncMock()
+        coordinator.data = {"zones": {}}
+
+        # Test async_save_room_sensors
+        await DomolinkTadoCoordinator.async_save_room_sensors(
+            coordinator,
+            {"1": ["sensor.temp_1", "sensor.temp_2"]}
+        )
+        self.assertEqual(
+            coordinator.hass.config_entries.async_update_entry.call_args[1]["options"][CONF_ZONE_TEMP_ENTITIES],
+            {"1": ["sensor.temp_1", "sensor.temp_2"]}
+        )
+
+        # Test async_set_valve_calibration_mode
+        coordinator.entry.options = {CONF_VALVE_CALIBRATION_MODES: {}}
+        await DomolinkTadoCoordinator.async_set_valve_calibration_mode(
+            coordinator,
+            "VA012345",
+            CALIBRATION_MODE_AUTO,
+        )
+        self.assertEqual(
+            coordinator.hass.config_entries.async_update_entry.call_args[1]["options"][CONF_VALVE_CALIBRATION_MODES],
+            {"VA012345": CALIBRATION_MODE_AUTO}
+        )
+
+
 

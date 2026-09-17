@@ -29,6 +29,7 @@ from .const import (
     PANEL_ICON,
     PANEL_NAME,
     PANEL_URL_PATH,
+    CALIBRATION_MODE_MANUAL,
     PLATFORMS,
     VERSION,
 )
@@ -189,6 +190,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         labels = call.data.get("labels", {})
         await coordinator.async_save_room_labels(labels)
 
+    async def handle_save_room_sensors(call: ServiceCall) -> None:
+        """Sauvegarder les capteurs de température externes par pièce."""
+        sensors = call.data.get("sensors", {})
+        await coordinator.async_save_room_sensors(sensors)
+
+    async def handle_set_valve_calibration_mode(call: ServiceCall) -> None:
+        """Définir le mode de calibration (AUTO ou MANUAL) pour une tête Tado."""
+        serial = call.data.get("device_serial")
+        mode = call.data.get("mode", CALIBRATION_MODE_MANUAL)
+        if serial:
+            await coordinator.async_set_valve_calibration_mode(serial, mode)
+
     async def handle_reauthenticate(call: ServiceCall) -> None:
         """Déclencher la ré-authentification Device Flow."""
         _LOGGER.info("DomoLink-Tado: Lancement du flux de ré-authentification...")
@@ -218,6 +231,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_register(DOMAIN, "set_temperature_offset", handle_temp_offset)
     if not hass.services.has_service(DOMAIN, "save_room_labels"):
         hass.services.async_register(DOMAIN, "save_room_labels", handle_save_labels)
+    if not hass.services.has_service(DOMAIN, "save_room_sensors"):
+        hass.services.async_register(DOMAIN, "save_room_sensors", handle_save_room_sensors)
+    if not hass.services.has_service(DOMAIN, "set_valve_calibration_mode"):
+        hass.services.async_register(DOMAIN, "set_valve_calibration_mode", handle_set_valve_calibration_mode)
     if not hass.services.has_service(DOMAIN, "reauthenticate"):
         hass.services.async_register(DOMAIN, "reauthenticate", handle_reauthenticate)
 

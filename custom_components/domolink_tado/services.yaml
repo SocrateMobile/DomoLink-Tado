@@ -129,8 +129,40 @@ save_room_labels:
       selector:
         object:
 
+save_room_sensors:
+  name: Sauvegarder les capteurs de température externes par pièce
+  description: Associe jusqu'à 4 capteurs de température externes par pièce pour calculer la moyenne et calibrer les têtes thermostatiques.
+  fields:
+    sensors:
+      name: Capteurs par pièce
+      description: Objet JSON associant l'ID de zone à une liste d'entités capteurs (ex. {"1": ["sensor.salon_temp_1", "sensor.salon_temp_2"]}).
+      required: true
+      selector:
+        object:
+
+set_valve_calibration_mode:
+  name: Définir le mode de calibration d'une vanne
+  description: Bascule une tête thermostatique entre le mode MANUEL et le mode AUTO (auto-calibrage sur la moyenne des capteurs de la pièce).
+  fields:
+    device_serial:
+      name: Numéro de série de l'appareil
+      description: Numéro de série de la vanne (ex. VA1234567890).
+      required: true
+      selector:
+        text:
+    mode:
+      name: Mode de calibration
+      description: Mode AUTO ou MANUAL.
+      required: true
+      selector:
+        select:
+          options:
+            - "AUTO"
+            - "MANUAL"
+
 reauthenticate:
   name: Ré-authentifier le compte Tado
   description: Déclenche le flux de ré-authentification Device Flow pour renouveler le jeton de connexion Tado.
+
 
 

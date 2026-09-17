@@ -435,12 +435,24 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
     """Handle options for DomoLink-Tado with optional re-authentication trigger."""
 
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        self.config_entry = config_entry
+    def __init__(self, config_entry: config_entries.ConfigEntry | None = None) -> None:
+        """Initialize options flow without conflicting with Home Assistant base property."""
+        self._config_entry = config_entry
         self._device_code: str | None = None
         self._user_code: str | None = None
         self._verification_uri: str = "https://login.tado.com/oauth2/device"
         self._verification_uri_complete: str | None = None
+
+    @property
+    def config_entry(self) -> config_entries.ConfigEntry:
+        """Return config entry, prioritizing HA base property with fallback."""
+        try:
+            entry = super().config_entry
+            if entry is not None:
+                return entry
+        except (AttributeError, KeyError, Exception):
+            pass
+        return self._config_entry
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Manage the options."""
@@ -658,13 +670,15 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
             for zid in zones:
                 t_val = str(user_input.get(f"temp_zone_{zid}", "")).strip()
                 if t_val:
-                    new_temp_map[str(zid)] = t_val
+                    items = [x.strip() for x in t_val.split(",") if x.strip()]
+                    new_temp_map[str(zid)] = items if len(items) > 1 else items[0]
                 elif str(zid) in new_temp_map:
                     del new_temp_map[str(zid)]
 
                 h_val = str(user_input.get(f"hum_zone_{zid}", "")).strip()
                 if h_val:
-                    new_hum_map[str(zid)] = h_val
+                    h_items = [x.strip() for x in h_val.split(",") if x.strip()]
+                    new_hum_map[str(zid)] = h_items if len(h_items) > 1 else h_items[0]
                 elif str(zid) in new_hum_map:
                     del new_hum_map[str(zid)]
 
@@ -673,21 +687,28 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
             updated_options[CONF_ZONE_HUMIDITY_ENTITIES] = new_hum_map
             return self.async_create_entry(title="", data=updated_options)
 
+        def _format_entry_val(val: Any) -> str:
+            if isinstance(val, list):
+                return ", ".join(str(x) for x in val if x)
+            return str(val) if val else ""
+
         schema_dict: dict[Any, Any] = {}
         for zid, zd in zones.items():
             zname = zd.get("name", f"Zone {zid}")
+            t_def = _format_entry_val(cur_temp_map.get(str(zid), ""))
+            h_def = _format_entry_val(cur_hum_map.get(str(zid), ""))
             schema_dict[
                 vol.Optional(
                     f"temp_zone_{zid}",
-                    default=cur_temp_map.get(str(zid), ""),
-                    description={"suggested_value": cur_temp_map.get(str(zid), "")},
+                    default=t_def,
+                    description={"suggested_value": t_def},
                 )
             ] = str
             schema_dict[
                 vol.Optional(
                     f"hum_zone_{zid}",
-                    default=cur_hum_map.get(str(zid), ""),
-                    description={"suggested_value": cur_hum_map.get(str(zid), "")},
+                    default=h_def,
+                    description={"suggested_value": h_def},
                 )
             ] = str
 
