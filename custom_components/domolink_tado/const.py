@@ -5,7 +5,7 @@ from homeassistant.const import Platform
 
 DOMAIN = "domolink_tado"
 NAME = "DomoLink-Tado"
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 
 # Endpoints API Tado
 TADO_AUTH_BASE = "https://login.tado.com/oauth2"
@@ -31,6 +31,14 @@ CONF_AUTO_WINDOW_DURATION = "auto_window_duration"
 CONF_ECO_TEMP = "eco_temperature"
 CONF_ADAPTIVE_POLLING = "adaptive_polling"
 CONF_OUTDOOR_WEATHER_ENTITY = "outdoor_weather_entity"
+CONF_PREHEAT_ENABLED = "preheat_enabled"
+CONF_PREHEAT_MODE = "preheat_mode"
+CONF_PREHEAT_MAX_DURATION = "preheat_max_duration"
+CONF_DYNAMIC_WINDOW_DROP = "dynamic_window_drop"
+
+# Modes de préchauffage
+PREHEAT_MODE_ADVISORY = "ADVISORY"
+PREHEAT_MODE_AUTONOMOUS = "AUTONOMOUS"
 
 # Overlay termination modes
 OVERLAY_NEXT_TIME_BLOCK = "NEXT_TIME_BLOCK"  # Jusqu'au prochain changement de programmation
@@ -43,6 +51,11 @@ DEFAULT_AUTO_WINDOW_ENABLED = True
 DEFAULT_AUTO_WINDOW_DURATION = 900  # 15 minutes
 DEFAULT_ECO_TEMP = 17.0
 DEFAULT_ADAPTIVE_POLLING = True
+DEFAULT_PREHEAT_ENABLED = False
+DEFAULT_PREHEAT_MODE = PREHEAT_MODE_ADVISORY
+DEFAULT_PREHEAT_MAX_DURATION = 90  # 90 minutes max par défaut
+DEFAULT_DYNAMIC_WINDOW_DROP = True
+DEFAULT_HEATING_RATE = 1.5  # 1.5 °C/heure par défaut pour un radiateur à eau chaude standard
 
 # Températures limites
 MIN_TEMP = 5.0

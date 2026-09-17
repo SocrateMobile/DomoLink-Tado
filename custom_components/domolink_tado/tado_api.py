@@ -382,6 +382,14 @@ class TadoClient:
         """Fetch global home state (e.g. HOME vs AWAY)."""
         return await self._request("GET", f"/homes/{home_id}/state")
 
+    async def get_active_timetable(self, home_id: int, zone_id: int) -> dict[str, Any]:
+        """Fetch active schedule timetable for a zone."""
+        return await self._request("GET", f"/homes/{home_id}/zones/{zone_id}/schedule/activeTimetable")
+
+    async def get_timetable_blocks(self, home_id: int, zone_id: int, timetable_id: int) -> list[dict[str, Any]]:
+        """Fetch schedule time blocks for a zone timetable."""
+        return await self._request("GET", f"/homes/{home_id}/zones/{zone_id}/schedule/timetables/{timetable_id}/blocks")
+
     async def set_zone_overlay(
         self,
         home_id: int,

@@ -18,6 +18,7 @@ from .const import (
     CONF_ADAPTIVE_POLLING,
     CONF_AUTO_WINDOW_DURATION,
     CONF_AUTO_WINDOW_ENABLED,
+    CONF_DYNAMIC_WINDOW_DROP,
     CONF_ECO_TEMP,
     CONF_EXPIRES_AT,
     CONF_HOME_ID,
@@ -25,19 +26,28 @@ from .const import (
     CONF_OUTDOOR_WEATHER_ENTITY,
     CONF_OVERLAY_DURATION,
     CONF_OVERLAY_MODE,
+    CONF_PREHEAT_ENABLED,
+    CONF_PREHEAT_MAX_DURATION,
+    CONF_PREHEAT_MODE,
     CONF_REFRESH_TOKEN,
     CONF_ROOM_LABELS,
     DEFAULT_ADAPTIVE_POLLING,
     DEFAULT_AUTO_WINDOW_DURATION,
     DEFAULT_AUTO_WINDOW_ENABLED,
+    DEFAULT_DYNAMIC_WINDOW_DROP,
     DEFAULT_ECO_TEMP,
     DEFAULT_OVERLAY_DURATION,
     DEFAULT_OVERLAY_MODE,
+    DEFAULT_PREHEAT_ENABLED,
+    DEFAULT_PREHEAT_MAX_DURATION,
+    DEFAULT_PREHEAT_MODE,
     DOMAIN,
     NAME,
     OVERLAY_MANUAL,
     OVERLAY_NEXT_TIME_BLOCK,
     OVERLAY_TIMER,
+    PREHEAT_MODE_ADVISORY,
+    PREHEAT_MODE_AUTONOMOUS,
 )
 from .tado_api import (
     TadoAuthError,
@@ -298,6 +308,10 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_OVERLAY_DURATION: DEFAULT_OVERLAY_DURATION,
                         CONF_AUTO_WINDOW_ENABLED: DEFAULT_AUTO_WINDOW_ENABLED,
                         CONF_AUTO_WINDOW_DURATION: DEFAULT_AUTO_WINDOW_DURATION,
+                        CONF_DYNAMIC_WINDOW_DROP: DEFAULT_DYNAMIC_WINDOW_DROP,
+                        CONF_PREHEAT_ENABLED: DEFAULT_PREHEAT_ENABLED,
+                        CONF_PREHEAT_MODE: DEFAULT_PREHEAT_MODE,
+                        CONF_PREHEAT_MAX_DURATION: DEFAULT_PREHEAT_MAX_DURATION,
                         CONF_ECO_TEMP: DEFAULT_ECO_TEMP,
                         CONF_ADAPTIVE_POLLING: DEFAULT_ADAPTIVE_POLLING,
                     },
@@ -348,6 +362,10 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_OVERLAY_DURATION: DEFAULT_OVERLAY_DURATION,
                     CONF_AUTO_WINDOW_ENABLED: DEFAULT_AUTO_WINDOW_ENABLED,
                     CONF_AUTO_WINDOW_DURATION: DEFAULT_AUTO_WINDOW_DURATION,
+                    CONF_DYNAMIC_WINDOW_DROP: DEFAULT_DYNAMIC_WINDOW_DROP,
+                    CONF_PREHEAT_ENABLED: DEFAULT_PREHEAT_ENABLED,
+                    CONF_PREHEAT_MODE: DEFAULT_PREHEAT_MODE,
+                    CONF_PREHEAT_MAX_DURATION: DEFAULT_PREHEAT_MAX_DURATION,
                     CONF_ECO_TEMP: DEFAULT_ECO_TEMP,
                     CONF_ADAPTIVE_POLLING: DEFAULT_ADAPTIVE_POLLING,
                 },
@@ -455,6 +473,35 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
                             CONF_AUTO_WINDOW_DURATION, DEFAULT_AUTO_WINDOW_DURATION
                         ),
                     ): vol.All(vol.Coerce(int), vol.Range(min=300, max=7200)),
+                    vol.Optional(
+                        CONF_DYNAMIC_WINDOW_DROP,
+                        default=self.config_entry.options.get(
+                            CONF_DYNAMIC_WINDOW_DROP, DEFAULT_DYNAMIC_WINDOW_DROP
+                        ),
+                    ): bool,
+                    vol.Optional(
+                        CONF_PREHEAT_ENABLED,
+                        default=self.config_entry.options.get(
+                            CONF_PREHEAT_ENABLED, DEFAULT_PREHEAT_ENABLED
+                        ),
+                    ): bool,
+                    vol.Optional(
+                        CONF_PREHEAT_MODE,
+                        default=self.config_entry.options.get(
+                            CONF_PREHEAT_MODE, DEFAULT_PREHEAT_MODE
+                        ),
+                    ): vol.In(
+                        {
+                            PREHEAT_MODE_ADVISORY: "Conseiller (Capteurs & Alertes uniquement)",
+                            PREHEAT_MODE_AUTONOMOUS: "Autonome (Déclenchement automatique de la chauffe)",
+                        }
+                    ),
+                    vol.Optional(
+                        CONF_PREHEAT_MAX_DURATION,
+                        default=self.config_entry.options.get(
+                            CONF_PREHEAT_MAX_DURATION, DEFAULT_PREHEAT_MAX_DURATION
+                        ),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=15, max=240)),
                     vol.Optional(
                         CONF_ECO_TEMP,
                         default=self.config_entry.options.get(

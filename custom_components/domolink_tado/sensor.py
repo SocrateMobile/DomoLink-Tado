@@ -1,6 +1,7 @@
 """Sensors platform for DomoLink-Tado."""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -45,6 +46,8 @@ async def async_setup_entry(
         entities.append(DomolinkTadoZoneDewPointSensor(coordinator, zone_id))
         entities.append(DomolinkTadoZoneAbsoluteHumiditySensor(coordinator, zone_id))
         entities.append(DomolinkTadoZoneMoldRiskSensor(coordinator, zone_id))
+        entities.append(DomolinkTadoZonePreheatAdvisorSensor(coordinator, zone_id))
+        entities.append(DomolinkTadoZoneHeatingRateSensor(coordinator, zone_id))
 
     # 3. Device Battery Sensors (Valves & Thermostats)
     devices = coordinator.data.get("devices", {})
@@ -305,6 +308,54 @@ class DomolinkTadoZoneMoldRiskSensor(DomolinkTadoZoneSensorBase):
     @property
     def native_value(self) -> str | None:
         return self._zone_data.get("mold_risk_level")
+
+
+class DomolinkTadoZonePreheatAdvisorSensor(DomolinkTadoZoneSensorBase):
+    """Sensor indicating the next preheat start timestamp and advisory metadata."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:clock-fast"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator, zone_id: int) -> None:
+        super().__init__(coordinator, zone_id)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{zone_id}_preheat_advisor"
+        self._attr_name = f"{self._zone_data.get('name', 'Zone')} Conseiller Préchauffage"
+
+    @property
+    def native_value(self) -> datetime | None:
+        iso_val = self._zone_data.get("preheat_advisor")
+        if not iso_val:
+            return None
+        try:
+            return datetime.fromisoformat(iso_val)
+        except (ValueError, TypeError):
+            return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "preheat_duration_minutes": self._zone_data.get("preheat_duration", 0),
+            "target_temperature": self._zone_data.get("preheat_target_temp"),
+            "heating_rate": self._zone_data.get("heating_rate"),
+        }
+
+
+class DomolinkTadoZoneHeatingRateSensor(DomolinkTadoZoneSensorBase):
+    """Sensor for zone learned heating rate in °C/h."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "°C/h"
+    _attr_icon = "mdi:speedometer"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator, zone_id: int) -> None:
+        super().__init__(coordinator, zone_id)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{zone_id}_heating_rate"
+        self._attr_name = f"{self._zone_data.get('name', 'Zone')} Vitesse de Chauffe"
+
+    @property
+    def native_value(self) -> float | None:
+        val = self._zone_data.get("heating_rate")
+        return round(float(val), 2) if val is not None else None
 
 
 # ── Device Battery Sensor ───────────────────────────────────
