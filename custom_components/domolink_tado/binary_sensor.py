@@ -36,6 +36,8 @@ async def async_setup_entry(
         entities.append(DomolinkTadoOpenWindowBinarySensor(coordinator, zone_id))
         entities.append(DomolinkTadoHeatingActiveBinarySensor(coordinator, zone_id))
         entities.append(DomolinkTadoOverlayActiveBinarySensor(coordinator, zone_id))
+        entities.append(DomolinkTadoZoneMoldRiskProblemBinarySensor(coordinator, zone_id))
+        entities.append(DomolinkTadoZoneVentilationRecommendedBinarySensor(coordinator, zone_id))
 
     # 3. Device Binary Sensors (Battery alert & Connection)
     devices = coordinator.data.get("devices", {})
@@ -138,6 +140,36 @@ class DomolinkTadoOverlayActiveBinarySensor(DomolinkTadoZoneBinarySensorBase):
     @property
     def is_on(self) -> bool:
         return bool(self._zone_data.get("is_overlay_active", False))
+
+
+class DomolinkTadoZoneMoldRiskProblemBinarySensor(DomolinkTadoZoneBinarySensorBase):
+    """Binary sensor indicating high mold risk in zone."""
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator, zone_id: int) -> None:
+        super().__init__(coordinator, zone_id)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{zone_id}_mold_problem"
+        self._attr_name = f"{self._zone_data.get('name', 'Zone')} Alerte Moisissure"
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._zone_data.get("mold_risk_problem", False))
+
+
+class DomolinkTadoZoneVentilationRecommendedBinarySensor(DomolinkTadoZoneBinarySensorBase):
+    """Binary sensor indicating if ventilation will dry out room."""
+
+    _attr_icon = "mdi:window-open-variant"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator, zone_id: int) -> None:
+        super().__init__(coordinator, zone_id)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{zone_id}_ventilation_recommended"
+        self._attr_name = f"{self._zone_data.get('name', 'Zone')} Aération Recommandée"
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._zone_data.get("ventilation_recommended", False))
 
 
 # ── Device Binary Sensors ───────────────────────────────────

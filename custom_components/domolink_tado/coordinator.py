@@ -21,6 +21,7 @@ from .const import (
     CONF_ECO_TEMP,
     CONF_HOME_ID,
     CONF_HOME_NAME,
+    CONF_OUTDOOR_WEATHER_ENTITY,
     CONF_OVERLAY_DURATION,
     CONF_OVERLAY_MODE,
     CONF_ROOM_LABELS,
@@ -33,6 +34,13 @@ from .const import (
     OVERLAY_NEXT_TIME_BLOCK,
     OVERLAY_TIMER,
     UPDATE_INTERVAL_SECONDS,
+)
+from .physics import (
+    calculate_absolute_humidity,
+    calculate_dew_point,
+    calculate_mold_risk_level,
+    calculate_mold_risk_problem,
+    calculate_ventilation_recommended,
 )
 from .tado_api import TadoAuthError, TadoClient, TadoError
 
@@ -78,6 +86,46 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             return [s.strip() for s in res.split(",") if s.strip()]
         return res if isinstance(res, list) else []
 
+    def _get_outdoor_conditions(self) -> tuple[float | None, float | None]:
+        """Get outdoor temperature and humidity from configured HA entity or Tado weather."""
+        outdoor_temp: float | None = None
+        outdoor_humidity: float | None = None
+
+        weather_entity = self.entry.options.get(CONF_OUTDOOR_WEATHER_ENTITY)
+        if weather_entity and getattr(self.hass, "states", None):
+            st = self.hass.states.get(weather_entity)
+            if st and st.state not in ("unavailable", "unknown"):
+                attrs = getattr(st, "attributes", {}) or {}
+                if "temperature" in attrs:
+                    try:
+                        outdoor_temp = float(attrs["temperature"])
+                    except (ValueError, TypeError):
+                        pass
+                if "humidity" in attrs:
+                    try:
+                        outdoor_humidity = float(attrs["humidity"])
+                    except (ValueError, TypeError):
+                        pass
+                if outdoor_temp is None:
+                    try:
+                        outdoor_temp = float(st.state)
+                    except (ValueError, TypeError):
+                        pass
+
+        if outdoor_temp is None and self._weather_raw:
+            outdoor_temp = self._weather_raw.get("outsideTemperature", {}).get("celsius")
+        if outdoor_humidity is None and self._weather_raw:
+            h_val = self._weather_raw.get("humidity")
+            if isinstance(h_val, dict):
+                outdoor_humidity = h_val.get("percentage")
+            elif h_val is not None:
+                try:
+                    outdoor_humidity = float(h_val)
+                except (ValueError, TypeError):
+                    pass
+
+        return outdoor_temp, outdoor_humidity
+
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch all zone states with smart metadata, weather, and presence caching."""
         try:
@@ -120,6 +168,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
             devices = self._devices_raw if isinstance(self._devices_raw, list) else []
             weather = self._weather_raw if isinstance(self._weather_raw, dict) else {}
+            outdoor_temp, outdoor_humidity = self._get_outdoor_conditions()
             home_state = self._home_state_raw if isinstance(self._home_state_raw, dict) else {}
 
             # Map devices by zone and serial number
@@ -210,6 +259,15 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if isinstance(room_labels, str):
                     room_labels = [lbl.strip() for lbl in room_labels.split(",") if lbl.strip()]
 
+                # Calculs physiques locaux (100% hors-ligne, zéro coût API)
+                dew_point = calculate_dew_point(inside_temp, humidity)
+                absolute_humidity = calculate_absolute_humidity(inside_temp, humidity)
+                mold_risk_level = calculate_mold_risk_level(inside_temp, humidity)
+                mold_risk_problem = calculate_mold_risk_problem(inside_temp, humidity)
+                ventilation_recommended = calculate_ventilation_recommended(
+                    inside_temp, humidity, outdoor_temp, outdoor_humidity
+                )
+
                 zones_data[zid] = {
                     "info": z,
                     "state": z_state,
@@ -224,6 +282,11 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "overlay": overlay,
                     "is_overlay_active": overlay is not None,
                     "open_window": open_window,
+                    "dew_point": dew_point,
+                    "absolute_humidity": absolute_humidity,
+                    "mold_risk_level": mold_risk_level,
+                    "mold_risk_problem": mold_risk_problem,
+                    "ventilation_recommended": ventilation_recommended,
                     "devices": enhanced_devices,
                     "labels": room_labels,
                 }
@@ -235,11 +298,6 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 if self.update_interval != timedelta(seconds=new_interval):
                     self.update_interval = timedelta(seconds=new_interval)
 
-            outdoor_temp = (
-                weather.get("outsideTemperature", {}).get("celsius")
-                if weather
-                else None
-            )
             weather_state = (
                 weather.get("weatherState", {}).get("value")
                 if weather
@@ -253,6 +311,9 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "devices": devices_by_serial,
                 "weather": {
                     "outdoor_temperature": outdoor_temp,
+                    "outdoor_humidity": outdoor_humidity,
+                    "outdoor_dew_point": calculate_dew_point(outdoor_temp, outdoor_humidity),
+                    "outdoor_absolute_humidity": calculate_absolute_humidity(outdoor_temp, outdoor_humidity),
                     "weather_state": weather_state,
                     "solar_intensity": weather.get("solarIntensity", {}).get("percentage", 0),
                 },
@@ -343,9 +404,14 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         optimistic_patch: dict[str, Any],
         call_fn: Callable[[int], Coroutine[Any, Any, Any]],
         concurrency: int = 2,
+        target_zone_ids: list[int] | None = None,
     ) -> None:
-        """Execute a batch command across all zones with optimistic update and controlled concurrency."""
-        zone_ids = list((self.data.get("zones", {})).keys()) if (self.data and "zones" in self.data) else []
+        """Execute a batch command across all zones (or target subset) with optimistic update and controlled concurrency."""
+        if target_zone_ids is not None:
+            zone_ids = [zid for zid in target_zone_ids if (self.data and "zones" in self.data and zid in self.data["zones"])]
+        else:
+            zone_ids = list((self.data.get("zones", {})).keys()) if (self.data and "zones" in self.data) else []
+
         if not zone_ids:
             return
 
@@ -387,6 +453,26 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     ) -> None:
         """Set temperature for a zone with immediate optimistic update and rollback."""
         rounded_temp = round(float(target_temp), 1)
+
+        # Filtre anti-redondance local (supprime les requêtes API inutiles)
+        current_zone = (self.data.get("zones", {})).get(zone_id) if self.data else None
+        if current_zone:
+            current_pwr = current_zone.get("power")
+            current_overlay = current_zone.get("is_overlay_active")
+            current_target = current_zone.get("target_temperature")
+            if (
+                current_pwr == "ON"
+                and current_overlay
+                and current_target is not None
+                and abs(float(current_target) - rounded_temp) < 0.1
+            ):
+                _LOGGER.debug(
+                    "DomoLink-Tado: Consigne identique déjà active sur la zone %s (%.1f°C). Appel API ignoré.",
+                    zone_id,
+                    rounded_temp,
+                )
+                return
+
         patch = {
             "target_temperature": rounded_temp,
             "power": "ON",
@@ -407,6 +493,15 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_set_zone_off(self, zone_id: int) -> None:
         """Turn heating off for a zone with immediate optimistic update and rollback."""
+        # Filtre anti-redondance local
+        current_zone = (self.data.get("zones", {})).get(zone_id) if self.data else None
+        if current_zone and current_zone.get("power") == "OFF" and current_zone.get("is_overlay_active"):
+            _LOGGER.debug(
+                "DomoLink-Tado: Zone %s déjà éteinte (OFF). Appel API ignoré.",
+                zone_id,
+            )
+            return
+
         patch = {
             "power": "OFF",
             "is_overlay_active": True,
@@ -424,6 +519,15 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_resume_schedule(self, zone_id: int) -> None:
         """Resume automatic schedule for a single zone with immediate optimistic update and rollback."""
+        # Filtre anti-redondance local
+        current_zone = (self.data.get("zones", {})).get(zone_id) if self.data else None
+        if current_zone and not current_zone.get("is_overlay_active"):
+            _LOGGER.debug(
+                "DomoLink-Tado: Zone %s déjà sous planning automatique. Appel API ignoré.",
+                zone_id,
+            )
+            return
+
         patch = {
             "is_overlay_active": False,
         }
@@ -435,14 +539,30 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_resume_all_schedules(self) -> None:
         """Resume automatic schedule across all zones with controlled concurrency."""
+        zones = self.data.get("zones", {}) if self.data else {}
+        zones_in_overlay = [zid for zid, zd in zones.items() if zd.get("is_overlay_active")]
+        if not zones_in_overlay:
+            _LOGGER.debug("DomoLink-Tado: Aucune zone en dérogation manuelle. Reprise globale ignorée.")
+            return
+
         await self._async_execute_all_zones(
             action_name="reprise planning",
             optimistic_patch={"is_overlay_active": False},
             call_fn=lambda zid: self.client.resume_schedule(self.home_id, zid),
+            target_zone_ids=zones_in_overlay,
         )
 
     async def async_set_all_off(self) -> None:
         """Turn off all heating zones with controlled concurrency."""
+        zones = self.data.get("zones", {}) if self.data else {}
+        zones_to_off = [
+            zid for zid, zd in zones.items()
+            if not (zd.get("power") == "OFF" and zd.get("is_overlay_active"))
+        ]
+        if not zones_to_off:
+            _LOGGER.debug("DomoLink-Tado: Toutes les zones sont déjà éteintes. Extinction globale ignorée.")
+            return
+
         await self._async_execute_all_zones(
             action_name="extinction",
             optimistic_patch={"power": "OFF", "is_overlay_active": True},
@@ -452,6 +572,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 power="OFF",
                 termination_type=OVERLAY_MANUAL,
             ),
+            target_zone_ids=zones_to_off,
         )
 
     async def async_set_boost(self, temp: float = 25.0, duration_seconds: int = 1800) -> None:
