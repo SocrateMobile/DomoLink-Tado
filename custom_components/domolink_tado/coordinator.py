@@ -1146,7 +1146,12 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self, device_serial: str, offset: float, refresh: bool = True
     ) -> None:
         """Set calibration offset on a device."""
-        await self.client.set_temperature_offset(device_serial, offset)
+        try:
+            await self.client.set_temperature_offset(device_serial, offset)
+            self._last_offset_update_time[device_serial] = time.time()
+        except TadoAuthError as auth_err:
+            _LOGGER.error("DomoLink-Tado: Session expirée lors de l'application de l'offset: %s", auth_err)
+            raise ConfigEntryAuthFailed(f"Session Tado expirée: {auth_err}") from auth_err
         if refresh:
             await self.async_request_refresh()
 
@@ -1194,8 +1199,23 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 curr_offset,
                                 new_offset,
                             )
-                            await self.client.set_temperature_offset(device_serial, new_offset)
-                            self._last_offset_update_time[device_serial] = time.time()
+                            try:
+                                await self.client.set_temperature_offset(device_serial, new_offset)
+                                self._last_offset_update_time[device_serial] = time.time()
+                            except TadoAuthError as auth_err:
+                                _LOGGER.error(
+                                    "DomoLink-Tado: Session expirée lors de la calibration AUTO de %s: %s",
+                                    device_serial,
+                                    auth_err,
+                                )
+                                raise ConfigEntryAuthFailed(f"Session Tado expirée: {auth_err}") from auth_err
+                            except Exception as err:
+                                _LOGGER.warning(
+                                    "DomoLink-Tado: Échec de l'application de l'offset sur %s: %s",
+                                    device_serial,
+                                    err,
+                                )
+                                raise
                             break
         await self.async_request_refresh()
 

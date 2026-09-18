@@ -1891,5 +1891,46 @@ class TestAuditFixes(unittest.IsolatedAsyncioTestCase):
             {"VA012345": CALIBRATION_MODE_AUTO}
         )
 
+    async def test_tado_scope_includes_offline_access(self):
+        """Test that TADO_SCOPE includes offline_access for refresh tokens."""
+        from custom_components.domolink_tado.const import TADO_SCOPE
+        self.assertIn("offline_access", TADO_SCOPE)
+
+    async def test_async_get_valid_token_expired_no_refresh(self):
+        """Test async_get_valid_token raises TadoAuthError when access token is expired and no refresh token."""
+        import time
+        from custom_components.domolink_tado.tado_api import TadoClient, TadoAuthError
+        session = MagicMock()
+        client = TadoClient(session, access_token="old_expired", refresh_token=None, expires_at=time.time() - 100)
+        with self.assertRaises(TadoAuthError):
+            await client.async_get_valid_token()
+
+    async def test_calibration_auto_raises_config_entry_auth_failed_on_401(self):
+        """Test async_set_valve_calibration_mode raises ConfigEntryAuthFailed on TadoAuthError."""
+        from custom_components.domolink_tado.coordinator import DomolinkTadoCoordinator, ConfigEntryAuthFailed
+        from custom_components.domolink_tado.tado_api import TadoAuthError
+        from custom_components.domolink_tado.const import CALIBRATION_MODE_AUTO, CONF_VALVE_CALIBRATION_MODES
+
+        coordinator = MagicMock()
+        coordinator.entry = MagicMock()
+        coordinator.entry.options = {}
+        coordinator.hass = MagicMock()
+        coordinator.data = {
+            "zones": {
+                1: {
+                    "raw_inside_temperature": 20.0,
+                    "inside_temperature": 21.0,
+                    "devices": [{"serialNo": "VA001", "currentMountedOffset": {"celsius": 0.0}}],
+                }
+            }
+        }
+        coordinator._last_offset_update_time = {}
+        coordinator.client = MagicMock()
+        coordinator.client.set_temperature_offset = AsyncMock(side_effect=TadoAuthError("unauthorized: token expired"))
+
+        with self.assertRaises(ConfigEntryAuthFailed):
+            await DomolinkTadoCoordinator.async_set_valve_calibration_mode(coordinator, "VA001", CALIBRATION_MODE_AUTO)
+
+
 
 
