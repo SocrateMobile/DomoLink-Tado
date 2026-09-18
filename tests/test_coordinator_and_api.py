@@ -1869,6 +1869,7 @@ class TestAuditFixes(unittest.IsolatedAsyncioTestCase):
         coordinator.entry.options = {}
         coordinator.hass = MagicMock()
         coordinator.async_request_refresh = AsyncMock()
+        coordinator._safe_request_refresh = AsyncMock()
         coordinator.data = {"zones": {}}
 
         # Test async_save_room_sensors
@@ -1930,6 +1931,7 @@ class TestAuditFixes(unittest.IsolatedAsyncioTestCase):
         coordinator.client = MagicMock()
         coordinator.client.set_temperature_offset = AsyncMock(side_effect=TadoAuthError("unauthorized: token expired"))
         coordinator.async_request_refresh = AsyncMock()
+        coordinator._safe_request_refresh = AsyncMock()
 
         # async_set_valve_calibration_mode should be resilient and not crash even if immediate offset fails
         await DomolinkTadoCoordinator.async_set_valve_calibration_mode(coordinator, "VA001", CALIBRATION_MODE_AUTO)
@@ -1955,7 +1957,55 @@ class TestAuditFixes(unittest.IsolatedAsyncioTestCase):
         self.assertIn("save_room_sensors", services)
         self.assertIn("set_valve_calibration_mode", services)
 
+    async def test_safe_request_refresh_swallows_exceptions(self):
+        """Test _safe_request_refresh absorbs exceptions from async_request_refresh."""
+        from custom_components.domolink_tado.coordinator import DomolinkTadoCoordinator
+        from homeassistant.exceptions import ConfigEntryAuthFailed
 
+        coordinator = MagicMock()
+        coordinator.async_request_refresh = AsyncMock(side_effect=ConfigEntryAuthFailed("Session expired"))
 
+        # Should not raise
+        await DomolinkTadoCoordinator._safe_request_refresh(coordinator)
 
+    async def test_save_room_labels_resilient_on_auth_failure(self):
+        """Test async_save_room_labels does not crash when async_request_refresh raises."""
+        from custom_components.domolink_tado.coordinator import DomolinkTadoCoordinator
+        from custom_components.domolink_tado.const import CONF_ROOM_LABELS
+        from homeassistant.exceptions import ConfigEntryAuthFailed
+        import functools
+
+        coordinator = MagicMock()
+        coordinator.entry = MagicMock()
+        coordinator.entry.options = {}
+        coordinator.hass = MagicMock()
+        coordinator.async_request_refresh = AsyncMock(side_effect=ConfigEntryAuthFailed("Session expired"))
+        # Bind the real _safe_request_refresh so it calls the mocked async_request_refresh
+        coordinator._safe_request_refresh = functools.partial(DomolinkTadoCoordinator._safe_request_refresh, coordinator)
+
+        # Should not raise
+        await DomolinkTadoCoordinator.async_save_room_labels(coordinator, {"1": ["RDC"]})
+        # Verify the labels were saved
+        call_args = coordinator.hass.config_entries.async_update_entry.call_args[1]["options"]
+        self.assertEqual(call_args[CONF_ROOM_LABELS], {"1": ["RDC"]})
+
+    async def test_save_room_sensors_resilient_on_auth_failure(self):
+        """Test async_save_room_sensors does not crash when async_request_refresh raises."""
+        from custom_components.domolink_tado.coordinator import DomolinkTadoCoordinator
+        from custom_components.domolink_tado.const import CONF_ZONE_TEMP_ENTITIES
+        from homeassistant.exceptions import ConfigEntryAuthFailed
+        import functools
+
+        coordinator = MagicMock()
+        coordinator.entry = MagicMock()
+        coordinator.entry.options = {}
+        coordinator.hass = MagicMock()
+        coordinator.async_request_refresh = AsyncMock(side_effect=ConfigEntryAuthFailed("Session expired"))
+        coordinator._safe_request_refresh = functools.partial(DomolinkTadoCoordinator._safe_request_refresh, coordinator)
+
+        # Should not raise
+        await DomolinkTadoCoordinator.async_save_room_sensors(coordinator, {"1": ["sensor.temp_1"]})
+        # Verify the sensors were saved
+        call_args = coordinator.hass.config_entries.async_update_entry.call_args[1]["options"]
+        self.assertEqual(call_args[CONF_ZONE_TEMP_ENTITIES], {"1": ["sensor.temp_1"]})
 
