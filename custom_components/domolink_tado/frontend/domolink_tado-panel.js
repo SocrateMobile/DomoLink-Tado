@@ -1651,29 +1651,11 @@ class DomolinkTadoPanel extends HTMLElement {
           color: #ffffff;
           font-size: 12px;
           outline: none;
-          width: 180px;
-          min-width: 140px;
+          width: 260px;
+          max-width: 100%;
           transition: border-color 0.2s;
         }
         .sensor-autocomplete-input:focus {
-          border-color: #10b981;
-        }
-
-        .sensor-select-input {
-          height: 36px;
-          box-sizing: border-box;
-          background: #1e293b;
-          border: 1px solid rgba(255, 255, 255, 0.12);
-          border-radius: 10px;
-          padding: 0 10px;
-          color: #ffffff;
-          font-size: 12px;
-          outline: none;
-          max-width: 220px;
-          min-width: 160px;
-          transition: border-color 0.2s;
-        }
-        .sensor-select-input:focus {
           border-color: #10b981;
         }
 
@@ -3081,11 +3063,7 @@ class DomolinkTadoPanel extends HTMLElement {
           const sensorAdderHtml = currentSensors.length < 4
             ? `
               <div class="sensor-adder-controls">
-                <input type="text" class="sensor-autocomplete-input" id="inputSensor_${zid}" list="allTempSensorsDatalist" placeholder="🔍 Taper pour chercher..." autocomplete="off" />
-                <select class="sensor-select-input" id="selectSensor_${zid}">
-                  <option value="">-- Liste (${availableForRoom.length} dispo) --</option>
-                  ${availableForRoom.map((s) => `<option value="${s.id}">${s.name} (${s.temp})</option>`).join("")}
-                </select>
+                <input type="text" class="sensor-autocomplete-input" id="inputSensor_${zid}" list="allTempSensorsDatalist" placeholder="🔍 Taper pour chercher (${availableForRoom.length} dispo)..." autocomplete="off" />
                 <button class="btn-add-sensor" data-zid="${zid}">+ Associer</button>
               </div>
             `
@@ -3177,8 +3155,7 @@ class DomolinkTadoPanel extends HTMLElement {
         btn.addEventListener("click", () => {
           const zid = btn.dataset.zid;
           const input = listEl.querySelector(`#inputSensor_${zid}`);
-          const select = listEl.querySelector(`#selectSensor_${zid}`);
-          let val = (input ? input.value.trim() : "") || (select ? select.value : "");
+          let val = input ? input.value.trim() : "";
           // Vérification si la valeur entrée correspond à un friendly_name ou un entity_id
           const found = allTempSensors.find(
             (s) => s.id.toLowerCase() === val.toLowerCase() || s.name.toLowerCase() === val.toLowerCase()
@@ -3202,29 +3179,6 @@ class DomolinkTadoPanel extends HTMLElement {
             const zid = input.id.replace("inputSensor_", "");
             const btn = listEl.querySelector(`.btn-add-sensor[data-zid="${zid}"]`);
             btn?.click();
-          }
-        });
-        input.addEventListener("input", () => {
-          const zid = input.id.replace("inputSensor_", "");
-          const select = listEl.querySelector(`#selectSensor_${zid}`);
-          if (select) {
-            const val = input.value.trim().toLowerCase();
-            const match = allTempSensors.find(
-              (s) => s.id.toLowerCase() === val || s.name.toLowerCase() === val
-            );
-            if (match) {
-              select.value = match.id;
-            }
-          }
-        });
-      });
-
-      listEl.querySelectorAll(".sensor-select-input").forEach((select) => {
-        select.addEventListener("change", () => {
-          const zid = select.id.replace("selectSensor_", "");
-          const input = listEl.querySelector(`#inputSensor_${zid}`);
-          if (input && select.value) {
-            input.value = select.value;
           }
         });
       });
