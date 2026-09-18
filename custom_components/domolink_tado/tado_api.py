@@ -187,10 +187,10 @@ class TadoClient:
                 return self.access_token
 
             if not self.refresh_token:
-                if self.access_token:
+                if self.access_token and time.time() < self.expires_at:
                     _LOGGER.warning("No refresh token available; using existing access token")
                     return self.access_token
-                raise TadoAuthError("No refresh token available")
+                raise TadoAuthError("No refresh token available and access token has expired")
 
             return await self.async_refresh_token()
 
@@ -439,6 +439,8 @@ class TadoClient:
 
                     elif resp.status not in (200, 201):
                         text = await resp.text()
+                        if resp.status == 401:
+                            raise TadoAuthError(f"API request to {endpoint} failed (401): {text}")
                         raise TadoError(f"API request to {endpoint} failed ({resp.status}): {text}")
 
                     else:
@@ -456,7 +458,16 @@ class TadoClient:
                 if resp.status == 401 and retry_auth:
                     # M-1 fix: utiliser async_get_valid_token (protégé par lock) au lieu d'appel direct
                     self.expires_at = 0  # Invalider le token pour forcer un refresh
-                    token = await self.async_get_valid_token()
+                    if not self.refresh_token:
+                        raise TadoAuthError(
+                            f"API request to {endpoint} failed (401): jeton d'accès expiré et aucun jeton de rafraîchissement disponible"
+                        )
+                    try:
+                        token = await self.async_get_valid_token()
+                    except TadoAuthError as auth_err:
+                        raise TadoAuthError(
+                            f"API request to {endpoint} failed (401): renouvellement du jeton impossible ({auth_err})"
+                        ) from auth_err
                     headers["Authorization"] = f"Bearer {token}"
                     return await self._request(
                         method, endpoint, json_data=json_data, params=params, retry_auth=False
