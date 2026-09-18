@@ -2189,28 +2189,25 @@ class DomolinkTadoPanel extends HTMLElement {
 
       <!-- MODALE DIALOGUE D'AUTHENTIFICATION RAPIDE -->
       <div class="modal-overlay" id="authModalOverlay">
-        <div class="modal-card" style="max-width: 480px; height: auto; padding: 28px; background: #131928;">
+        <div class="modal-card" style="max-width: 500px; height: auto; padding: 28px; background: #131928;">
           <button class="modal-close-btn" id="authModalCloseBtn">✕</button>
           <div style="text-align: center; margin-bottom: 20px;">
             <div style="font-size: 42px; margin-bottom: 8px;">🔑</div>
-            <h2 style="font-size: 22px; font-weight: 800; margin: 0; color: #ffffff;">Authentification DomoLink-Tado</h2>
+            <h2 style="font-size: 22px; font-weight: 800; margin: 0; color: #ffffff;">Connexion & Jeton Tado</h2>
             <p style="font-size: 13px; color: #94a3b8; margin: 6px 0 0 0;">Protocole sécurisé officiel Tado Device Flow</p>
           </div>
 
-          <div style="background: rgba(0, 0, 0, 0.28); border-radius: 20px; padding: 20px; text-align: center; margin-bottom: 20px; border: 1px solid rgba(255, 255, 255, 0.08);">
-            <div style="font-size: 12px; color: #94a3b8; font-weight: 700; text-transform: uppercase;">1. Ouvrez le lien Tado officiel</div>
-            <a id="authLinkBtn" href="https://login.tado.com/oauth2/device" target="_blank" style="display: inline-block; margin: 12px 0; background: #0284c7; color: #ffffff; padding: 10px 20px; border-radius: 12px; text-decoration: none; font-weight: 800; font-size: 14px; box-shadow: 0 4px 12px rgba(2, 132, 199, 0.4);">
-              ↗ Se connecter sur login.tado.com
-            </a>
-            <div style="font-size: 12px; color: #94a3b8; margin-top: 10px;">2. Autorisez l'accès à votre domicile</div>
-          </div>
-
-          <div style="font-size: 13px; color: #cbd5e1; line-height: 1.5; margin-bottom: 24px;">
-            Une fois validé sur votre compte Tado, cliquez sur le bouton ci-dessous pour finaliser l'enregistrement immédiat du nouveau jeton dans Home Assistant.
+          <div style="background: rgba(0, 0, 0, 0.28); border-radius: 16px; padding: 18px; text-align: left; margin-bottom: 20px; border: 1px solid rgba(255, 255, 255, 0.08); font-size: 13px; line-height: 1.6; color: #cbd5e1;">
+            <p style="margin: 0 0 10px 0; font-weight: 700; color: #38bdf8;">Comment obtenir votre nouveau jeton permanent :</p>
+            <ol style="margin: 0; padding-left: 18px;">
+              <li style="margin-bottom: 8px;">Cliquez sur le bouton ci-dessous pour ouvrir la page <strong>Intégrations</strong> de Home Assistant.</li>
+              <li style="margin-bottom: 8px;">Sur la carte <strong>DomoLink-Tado</strong>, cliquez sur <strong>« Reconfigurer »</strong> ou sur <strong>« Configurer »</strong> (puis cochez <em>🔑 Lancer une ré-authentification</em>).</li>
+              <li>Home Assistant générera alors votre <strong>code personnel à 6 lettres</strong> et le lien direct pour autoriser votre compte sur login.tado.com.</li>
+            </ol>
           </div>
 
           <button class="btn-save-all" id="btnLaunchReauthFlow" style="width: 100%; text-align: center; justify-content: center; font-size: 15px; padding: 14px;">
-            ✓ Lancer le renouvellement du jeton
+            🚀 Ouvrir la configuration dans Home Assistant
           </button>
           <div id="authDialogStatus" style="margin-top: 14px; text-align: center; font-size: 13px; font-weight: 700; color: #38bdf8;"></div>
         </div>
@@ -2283,16 +2280,12 @@ class DomolinkTadoPanel extends HTMLElement {
 
     this.querySelector("#btnLaunchReauthFlow")?.addEventListener("click", () => {
       const statusEl = this.querySelector("#authDialogStatus");
-      if (statusEl) statusEl.textContent = "Lancement de la procédure d'authentification...";
+      if (statusEl) statusEl.textContent = "Lancement de la procédure et redirection vers Home Assistant...";
       this._callService("domolink_tado", "reauthenticate", {});
       setTimeout(() => {
-        if (statusEl) statusEl.textContent = "✓ Procédure initiée ! Redirection vers Home Assistant...";
-        setTimeout(() => {
-          closeAuthModal();
-          // Rediriger vers la page des intégrations HA
-          window.location.href = "/config/integrations";
-        }, 1500);
-      }, 1000);
+        closeAuthModal();
+        window.location.href = "/config/integrations";
+      }, 700);
     });
 
     // Boutons de la tuile globale 4 quadrants
