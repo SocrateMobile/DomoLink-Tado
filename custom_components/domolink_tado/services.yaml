@@ -124,7 +124,7 @@ save_room_labels:
   fields:
     labels:
       name: Étiquettes par pièce
-      description: Objet JSON associant l'ID de zone à une liste de tags (ex. {"1": ["RDC", "Salon"], "2": ["Étage"]}).
+      description: "Objet JSON associant l'ID de zone à une liste de tags (ex. {\"1\": [\"RDC\", \"Salon\"], \"2\": [\"Étage\"]})."
       required: true
       selector:
         object:
@@ -135,7 +135,7 @@ save_room_sensors:
   fields:
     sensors:
       name: Capteurs par pièce
-      description: Objet JSON associant l'ID de zone à une liste d'entités capteurs (ex. {"1": ["sensor.salon_temp_1", "sensor.salon_temp_2"]}).
+      description: "Objet JSON associant l'ID de zone à une liste d'entités capteurs (ex. {\"1\": [\"sensor.salon_temp_1\", \"sensor.salon_temp_2\"]})."
       required: true
       selector:
         object:
