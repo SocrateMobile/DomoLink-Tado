@@ -155,9 +155,11 @@ if "homeassistant" not in sys.modules:
     class ConfigEntryAuthFailed(Exception): pass
     class UpdateFailed(Exception): pass
     class ConfigEntryNotReady(Exception): pass
+    class HomeAssistantError(Exception): pass
     ha_exc.ConfigEntryAuthFailed = ConfigEntryAuthFailed
     ha_exc.UpdateFailed = UpdateFailed
     ha_exc.ConfigEntryNotReady = ConfigEntryNotReady
+    ha_exc.HomeAssistantError = HomeAssistantError
 
     ha_helpers = make_pkg("homeassistant.helpers")
     ha_ent = make_pkg("homeassistant.helpers.entity")
@@ -1905,9 +1907,9 @@ class TestAuditFixes(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(TadoAuthError):
             await client.async_get_valid_token()
 
-    async def test_calibration_auto_raises_config_entry_auth_failed_on_401(self):
-        """Test async_set_valve_calibration_mode raises ConfigEntryAuthFailed on TadoAuthError."""
-        from custom_components.domolink_tado.coordinator import DomolinkTadoCoordinator, ConfigEntryAuthFailed
+    async def test_calibration_auto_resilient_on_auth_failure(self):
+        """Test async_set_valve_calibration_mode is resilient and does not fail on TadoAuthError."""
+        from custom_components.domolink_tado.coordinator import DomolinkTadoCoordinator
         from custom_components.domolink_tado.tado_api import TadoAuthError
         from custom_components.domolink_tado.const import CALIBRATION_MODE_AUTO, CONF_VALVE_CALIBRATION_MODES
 
@@ -1927,9 +1929,19 @@ class TestAuditFixes(unittest.IsolatedAsyncioTestCase):
         coordinator._last_offset_update_time = {}
         coordinator.client = MagicMock()
         coordinator.client.set_temperature_offset = AsyncMock(side_effect=TadoAuthError("unauthorized: token expired"))
+        coordinator.async_request_refresh = AsyncMock()
 
-        with self.assertRaises(ConfigEntryAuthFailed):
-            await DomolinkTadoCoordinator.async_set_valve_calibration_mode(coordinator, "VA001", CALIBRATION_MODE_AUTO)
+        # async_set_valve_calibration_mode should be resilient and not crash even if immediate offset fails
+        await DomolinkTadoCoordinator.async_set_valve_calibration_mode(coordinator, "VA001", CALIBRATION_MODE_AUTO)
+        self.assertEqual(
+            coordinator.hass.config_entries.async_update_entry.call_args[1]["options"][CONF_VALVE_CALIBRATION_MODES],
+            {"VA001": CALIBRATION_MODE_AUTO},
+        )
+
+        # async_set_temperature_offset should raise HomeAssistantError on auth failure
+        from homeassistant.exceptions import HomeAssistantError
+        with self.assertRaises(HomeAssistantError):
+            await DomolinkTadoCoordinator.async_set_temperature_offset(coordinator, "VA001", 1.5)
 
     def test_services_yaml_is_valid(self):
         """Test that services.yaml is valid YAML and defines expected services."""

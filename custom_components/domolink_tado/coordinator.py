@@ -11,7 +11,7 @@ import aiohttp
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -1151,7 +1151,12 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._last_offset_update_time[device_serial] = time.time()
         except TadoAuthError as auth_err:
             _LOGGER.error("DomoLink-Tado: Session expirée lors de l'application de l'offset: %s", auth_err)
-            raise ConfigEntryAuthFailed(f"Session Tado expirée: {auth_err}") from auth_err
+            raise HomeAssistantError(
+                f"Session Tado expirée : veuillez reconnecter votre compte dans Paramètres > Appareils et services > DomoLink-Tado."
+            ) from auth_err
+        except Exception as err:
+            _LOGGER.error("DomoLink-Tado: Erreur lors de l'application de l'offset sur %s: %s", device_serial, err)
+            raise HomeAssistantError(f"Erreur Tado: {err}") from err
         if refresh:
             await self.async_request_refresh()
 
@@ -1177,7 +1182,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         current_options[CONF_VALVE_CALIBRATION_MODES] = modes
         self.hass.config_entries.async_update_entry(self.entry, options=current_options)
 
-        # If switched to AUTO, immediately compute and apply the target offset
+        # If switched to AUTO, immediately compute and apply the target offset (non-blocking if API fails)
         if mode == CALIBRATION_MODE_AUTO and self.data and "zones" in self.data:
             for zid, z_data in self.data["zones"].items():
                 devices = z_data.get("devices", [])
@@ -1203,19 +1208,17 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 await self.client.set_temperature_offset(device_serial, new_offset)
                                 self._last_offset_update_time[device_serial] = time.time()
                             except TadoAuthError as auth_err:
-                                _LOGGER.error(
-                                    "DomoLink-Tado: Session expirée lors de la calibration AUTO de %s: %s",
+                                _LOGGER.warning(
+                                    "DomoLink-Tado: Session expirée lors de la calibration immédiate de %s: %s. Le mode AUTO est bien enregistré.",
                                     device_serial,
                                     auth_err,
                                 )
-                                raise ConfigEntryAuthFailed(f"Session Tado expirée: {auth_err}") from auth_err
                             except Exception as err:
                                 _LOGGER.warning(
-                                    "DomoLink-Tado: Échec de l'application de l'offset sur %s: %s",
+                                    "DomoLink-Tado: Impossible d'appliquer l'offset immédiat sur %s (%s). Le mode AUTO est bien enregistré et s'appliquera au prochain cycle.",
                                     device_serial,
                                     err,
                                 )
-                                raise
                             break
         await self.async_request_refresh()
 

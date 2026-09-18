@@ -5,7 +5,7 @@ from homeassistant.const import Platform
 
 DOMAIN = "domolink_tado"
 NAME = "DomoLink-Tado"
-VERSION = "1.5.11"
+VERSION = "1.5.12"
 
 # Endpoints API Tado
 TADO_AUTH_BASE = "https://login.tado.com/oauth2"
