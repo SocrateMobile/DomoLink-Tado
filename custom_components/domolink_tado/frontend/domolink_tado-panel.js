@@ -304,6 +304,9 @@ class DomolinkTadoPanel extends HTMLElement {
         raw_inside_temp: attrs.raw_inside_temperature,
         devices: devices,
         primary_device_type: primaryDeviceType,
+        min_temp: attrs.min_temp != null ? parseFloat(attrs.min_temp) : 5.0,
+        max_temp: attrs.max_temp != null ? parseFloat(attrs.max_temp) : (attrs.is_ac ? 30.0 : 25.0),
+        is_ac: !!attrs.is_ac,
       });
     }
 
@@ -2120,8 +2123,7 @@ class DomolinkTadoPanel extends HTMLElement {
           <!-- CARTE THERMOSTAT AVEC CURSEUR QUI MONTE ET QUI DESCEND -->
           <div class="thermostat-vertical-card" id="modalThermostatCard">
             <!-- Règle graduée en arrière-plan -->
-            <div class="scale-markers">
-              <div class="scale-line" data-temp="30"><span>30°</span></div>
+            <div class="scale-markers" id="modalScaleMarkers">
               <div class="scale-line" data-temp="25"><span>25°</span></div>
               <div class="scale-line" data-temp="20"><span>20°</span></div>
               <div class="scale-line" data-temp="15"><span>15°</span></div>
@@ -2378,17 +2380,47 @@ class DomolinkTadoPanel extends HTMLElement {
     });
   }
 
+  _updateScaleMarkers(z) {
+    const container = this.querySelector("#modalScaleMarkers");
+    if (!container) return;
+    const maxTemp = z?.max_temp || (z?.is_ac ? 30.0 : 25.0);
+    const minTemp = z?.min_temp || 5.0;
+    const temps = [];
+    for (let t = maxTemp; t >= minTemp; t -= 5.0) {
+      temps.push(t);
+    }
+    container.innerHTML = temps
+      .map((t) => `<div class="scale-line" data-temp="${t}"><span>${t}°</span></div>`)
+      .join("");
+    container.querySelectorAll(".scale-line").forEach((line) => {
+      line.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const t = parseFloat(line.dataset.temp);
+        if (!isNaN(t) && this._activeModalZone) {
+          const clamped = Math.max(minTemp, Math.min(maxTemp, t));
+          this._activeModalZone.target_num = clamped;
+          this._activeModalZone.target_temp = clamped.toFixed(1);
+          this._setCursorPosition(clamped, true);
+          this._updateModalBackgroundOnly(clamped);
+          this._applyTargetTemperature(this._activeModalZone, clamped, 600);
+        }
+      });
+    });
+  }
+
   _bindVerticalCursor() {
     const card = this.querySelector("#modalThermostatCard");
     const cursor = this.querySelector("#thermostatSlidingCursor");
     if (!card || !cursor) return;
 
     let isDragging = false;
-    const minTemp = 5.0;
-    const maxTemp = 30.0;
-    const span = maxTemp - minTemp;
 
     const handleMove = (clientY) => {
+      const z = this._activeModalZone;
+      const minTemp = z?.min_temp || 5.0;
+      const maxTemp = z?.max_temp || (z?.is_ac ? 30.0 : 25.0);
+      const span = maxTemp - minTemp;
+
       const rect = card.getBoundingClientRect();
       const cursorHeight = cursor.offsetHeight || 140;
       const paddingTop = 16;
@@ -2448,22 +2480,6 @@ class DomolinkTadoPanel extends HTMLElement {
     window.addEventListener("pointerup", stopDrag);
     window.addEventListener("pointercancel", stopDrag);
 
-    // Clic sur les graduations
-    const lines = this.querySelectorAll(".scale-line");
-    lines.forEach((line) => {
-      line.addEventListener("click", (e) => {
-        e.stopPropagation();
-        const t = parseFloat(line.dataset.temp);
-        if (!isNaN(t) && this._activeModalZone) {
-          this._activeModalZone.target_num = t;
-          this._activeModalZone.target_temp = t.toFixed(1);
-          this._setCursorPosition(t, true);
-          this._updateModalBackgroundOnly(t);
-          this._applyTargetTemperature(this._activeModalZone, t, 600);
-        }
-      });
-    });
-
     // Boutons − et + sur le curseur
     this.querySelector("#btnCursorMinus")?.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -2478,13 +2494,16 @@ class DomolinkTadoPanel extends HTMLElement {
 
   _adjustCursorTemp(delta) {
     if (!this._activeModalZone) return;
-    let t = (this._activeModalZone.target_num || 20.0) + delta;
-    t = Math.max(5.0, Math.min(30.0, Math.round(t * 2) / 2));
-    this._activeModalZone.target_num = t;
-    this._activeModalZone.target_temp = t.toFixed(1);
+    const z = this._activeModalZone;
+    const minTemp = z.min_temp || 5.0;
+    const maxTemp = z.max_temp || (z.is_ac ? 30.0 : 25.0);
+    let t = (z.target_num || 20.0) + delta;
+    t = Math.max(minTemp, Math.min(maxTemp, Math.round(t * 2) / 2));
+    z.target_num = t;
+    z.target_temp = t.toFixed(1);
     this._setCursorPosition(t, true);
     this._updateModalBackgroundOnly(t);
-    this._applyTargetTemperature(this._activeModalZone, t, 650);
+    this._applyTargetTemperature(z, t, 650);
   }
 
   _setCursorPosition(temp, animate = true) {
@@ -2492,15 +2511,19 @@ class DomolinkTadoPanel extends HTMLElement {
     const cursor = this.querySelector("#thermostatSlidingCursor");
     if (!card || !cursor) return;
 
-    const t = Math.max(5.0, Math.min(30.0, parseFloat(temp) || 20.0));
+    const z = this._activeModalZone;
+    const minTemp = z?.min_temp || 5.0;
+    const maxTemp = z?.max_temp || (z?.is_ac ? 30.0 : 25.0);
+    const span = maxTemp - minTemp;
+
+    const t = Math.max(minTemp, Math.min(maxTemp, parseFloat(temp) || 20.0));
     const cursorHeight = cursor.offsetHeight || 140;
-    const cardHeight = card.clientHeight || 420;
-    const paddingTop = 30;
-    const paddingBottom = 30;
-    const travel = cardHeight - paddingTop - paddingBottom - cursorHeight;
+    const cardHeight = card.clientHeight || 360;
+    const paddingTop = 16;
+    const travel = cardHeight - cursorHeight - 32;
     if (travel <= 0) return;
 
-    const ratio = (t - 5.0) / 25.0;
+    const ratio = (t - minTemp) / span;
     const topPos = paddingTop + (1.0 - ratio) * travel;
 
     cursor.style.transition = animate ? "top 0.26s cubic-bezier(0.16, 1, 0.3, 1)" : "none";
@@ -2595,6 +2618,8 @@ class DomolinkTadoPanel extends HTMLElement {
 
     const targetBigEl = this.querySelector("#modalTargetBig");
     if (targetBigEl) targetBigEl.textContent = z.state === "off" ? "OFF" : z.target_num.toFixed(1);
+
+    this._updateScaleMarkers(z);
 
     if (syncPosition && !this._cursorDragActive) {
       this._setCursorPosition(z.target_num, false);
@@ -2870,8 +2895,10 @@ class DomolinkTadoPanel extends HTMLElement {
 
         card.querySelector(".btn-quick-minus")?.addEventListener("click", (e) => {
           e.stopPropagation();
+          const minTemp = z.min_temp || 5.0;
+          const maxTemp = z.max_temp || (z.is_ac ? 30.0 : 25.0);
           let t = (z.target_num || 20.0) - 0.5;
-          t = Math.max(5.0, Math.min(30.0, Math.round(t * 2) / 2));
+          t = Math.max(minTemp, Math.min(maxTemp, Math.round(t * 2) / 2));
           z.target_num = t;
           z.target_temp = t.toFixed(1);
           const valSpan = card.querySelector(".quick-target-val");
@@ -2884,8 +2911,10 @@ class DomolinkTadoPanel extends HTMLElement {
 
         card.querySelector(".btn-quick-plus")?.addEventListener("click", (e) => {
           e.stopPropagation();
+          const minTemp = z.min_temp || 5.0;
+          const maxTemp = z.max_temp || (z.is_ac ? 30.0 : 25.0);
           let t = (z.target_num || 20.0) + 0.5;
-          t = Math.max(5.0, Math.min(30.0, Math.round(t * 2) / 2));
+          t = Math.max(minTemp, Math.min(maxTemp, Math.round(t * 2) / 2));
           z.target_num = t;
           z.target_temp = t.toFixed(1);
           const valSpan = card.querySelector(".quick-target-val");

@@ -58,8 +58,18 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_precision = PRECISION_HALVES
     _attr_target_temperature_step = TEMP_STEP
-    _attr_min_temp = MIN_TEMP
-    _attr_max_temp = MAX_TEMP
+
+    @property
+    def min_temp(self) -> float:
+        """Return minimum supported temperature."""
+        return MIN_TEMP
+
+    @property
+    def max_temp(self) -> float:
+        """Return maximum supported temperature (25°C for heating, 30°C for AC)."""
+        if self.is_ac:
+            return MAX_TEMP
+        return 25.0
 
     def __init__(
         self,
@@ -250,6 +260,9 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
         attrs: dict[str, Any] = {
             "zone_id": self.zone_id,
             "zone_type": z.get("type", "HEATING"),
+            "min_temp": self.min_temp,
+            "max_temp": self.max_temp,
+            "is_ac": self.is_ac,
             "heating_power_percentage": float(z.get("heating_power") or 0.0),
             "is_overlay_active": z.get("is_overlay_active", False),
             "open_window_detected": z.get("open_window", False),
@@ -302,6 +315,9 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
         if temp is None:
             return
 
+        # Clamp temperature to supported range to prevent Tado 422 errors (5–25°C for heating, 5–30°C for AC)
+        clamped_temp = round(max(self.min_temp, min(self.max_temp, float(temp))), 1)
+
         overlay_mode = self.entry.options.get(CONF_OVERLAY_MODE, DEFAULT_OVERLAY_MODE)
         duration = self.entry.options.get(CONF_OVERLAY_DURATION, DEFAULT_OVERLAY_DURATION)
 
@@ -313,7 +329,7 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
             await self.coordinator.async_set_ac_mode(
                 zone_id=self.zone_id,
                 mode=curr_mode,
-                target_temp=temp,
+                target_temp=clamped_temp,
                 fan_speed=self.fan_mode.upper() if self.fan_mode else "AUTO",
                 swing=self.swing_mode.upper() if self.swing_mode else "OFF",
                 termination_type=overlay_mode,
@@ -322,7 +338,7 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
         else:
             await self.coordinator.async_set_temperature(
                 zone_id=self.zone_id,
-                target_temp=temp,
+                target_temp=clamped_temp,
                 termination_type=overlay_mode,
                 duration_seconds=duration,
             )

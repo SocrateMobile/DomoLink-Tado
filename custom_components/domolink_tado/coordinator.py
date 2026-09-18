@@ -781,11 +781,13 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         termination_type: str = OVERLAY_NEXT_TIME_BLOCK,
         duration_seconds: int | None = None,
     ) -> None:
-        """Set temperature for a zone with immediate optimistic update and rollback."""
-        rounded_temp = round(float(target_temp), 1)
+        current_zone = (self.data.get("zones", {})).get(zone_id) if self.data else None
+        is_ac = current_zone.get("type") == "AIR_CONDITIONING" if current_zone else False
+        max_limit = 30.0 if is_ac else 25.0
+        min_limit = 5.0
+        rounded_temp = round(max(min_limit, min(max_limit, float(target_temp))), 1)
 
         # Filtre anti-redondance local (supprime les requêtes API inutiles)
-        current_zone = (self.data.get("zones", {})).get(zone_id) if self.data else None
         if current_zone:
             current_pwr = current_zone.get("power")
             current_overlay = current_zone.get("is_overlay_active")

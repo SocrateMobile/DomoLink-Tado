@@ -2009,3 +2009,79 @@ class TestAuditFixes(unittest.IsolatedAsyncioTestCase):
         call_args = coordinator.hass.config_entries.async_update_entry.call_args[1]["options"]
         self.assertEqual(call_args[CONF_ZONE_TEMP_ENTITIES], {"1": ["sensor.temp_1"]})
 
+    async def test_heating_zone_max_temp_and_clamping(self):
+        """Test that heating zone max_temp is 25.0 and set_temperature clamps values > 25.0."""
+        from custom_components.domolink_tado.climate import DomolinkTadoClimate
+
+        coordinator = MagicMock()
+        coordinator.home_id = 123
+        coordinator.get_zone_labels = MagicMock(return_value=[])
+        coordinator.async_set_temperature = AsyncMock()
+        coordinator.data = {
+            "zones": {
+                1: {
+                    "name": "Radiateur Salon",
+                    "type": "HEATING",
+                    "target_temperature": 20.0,
+                },
+                2: {
+                    "name": "Clim Bureau",
+                    "type": "AIR_CONDITIONING",
+                    "target_temperature": 22.0,
+                },
+            }
+        }
+        entry = MagicMock()
+        entry.options = {}
+
+        # 1. Heating zone
+        heating_climate = DomolinkTadoClimate(coordinator, entry, 1)
+        self.assertEqual(heating_climate.max_temp, 25.0)
+        self.assertEqual(heating_climate.min_temp, 5.0)
+        self.assertEqual(heating_climate.extra_state_attributes["max_temp"], 25.0)
+
+        # Set temperature above 25.0 should be clamped to 25.0
+        await heating_climate.async_set_temperature(temperature=28.5)
+        coordinator.async_set_temperature.assert_called_once()
+        _, kwargs = coordinator.async_set_temperature.call_args
+        self.assertEqual(kwargs["target_temp"], 25.0)
+
+        # 2. AC zone
+        coordinator.async_set_ac_mode = AsyncMock()
+        ac_climate = DomolinkTadoClimate(coordinator, entry, 2)
+        self.assertEqual(ac_climate.max_temp, 30.0)
+        await ac_climate.async_set_temperature(temperature=28.5)
+        coordinator.async_set_ac_mode.assert_called_once()
+        _, ac_kwargs = coordinator.async_set_ac_mode.call_args
+        self.assertEqual(ac_kwargs["target_temp"], 28.5)
+
+    async def test_coordinator_clamped_temperature(self):
+        """Test coordinator clamps heating target_temp to 25.0 max."""
+        from custom_components.domolink_tado.coordinator import DomolinkTadoCoordinator
+
+        coordinator = MagicMock()
+        coordinator.home_id = 123
+        coordinator.client = MagicMock()
+        coordinator.client.set_zone_overlay = AsyncMock()
+        async def fake_optimistic(zid, patch, coro):
+            try:
+                coro.close()
+            except Exception:
+                pass
+        coordinator._async_optimistic_zone_update = AsyncMock(side_effect=fake_optimistic)
+        coordinator.data = {
+            "zones": {
+                1: {
+                    "type": "HEATING",
+                    "power": "OFF",
+                    "is_overlay_active": False,
+                }
+            }
+        }
+
+        await DomolinkTadoCoordinator.async_set_temperature(coordinator, 1, 29.0)
+        coordinator._async_optimistic_zone_update.assert_called_once()
+        call_patch = coordinator._async_optimistic_zone_update.call_args[0][1]
+        self.assertEqual(call_patch["target_temperature"], 25.0)
+
+
