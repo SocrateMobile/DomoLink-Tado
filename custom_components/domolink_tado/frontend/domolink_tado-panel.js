@@ -223,6 +223,7 @@ class DomolinkTadoPanel extends HTMLElement {
     const allDevices = [];
     let activeCount = 0;
     const labelsSet = new Set();
+    const valveModes = {};
 
     for (const key of climateKeys) {
       const entity = states[key];
@@ -245,10 +246,12 @@ class DomolinkTadoPanel extends HTMLElement {
       const labels = Array.isArray(attrs.labels) ? attrs.labels : [];
       labels.forEach((l) => labelsSet.add(l));
 
-      const valveModes = {};
       if (attrs.valve_calibration_modes && typeof attrs.valve_calibration_modes === "object") {
         Object.assign(valveModes, attrs.valve_calibration_modes);
       }
+
+      const primaryDevice = devices[0] || {};
+      const primaryDeviceType = attrs.device_type || primaryDevice.device_type || primaryDevice.type || primaryDevice.deviceType || (name.toLowerCase().includes("thermostat") ? "RU01" : "VA01");
 
       for (const d of devices) {
         allDevices.push({
