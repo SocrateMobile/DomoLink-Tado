@@ -980,7 +980,14 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def async_set_child_lock(self, device_serial: str, child_lock: bool) -> None:
         """Toggle physical child lock on a valve."""
-        await self.client.set_child_lock(device_serial, child_lock)
+        try:
+            await self.client.set_child_lock(device_serial, child_lock)
+        except TadoAuthError as auth_err:
+            raise HomeAssistantError(
+                "Session Tado expirée : veuillez reconnecter votre compte dans Paramètres > Appareils et services > DomoLink-Tado."
+            ) from auth_err
+        except Exception as err:
+            raise HomeAssistantError(f"Erreur Tado (verrouillage enfant): {err}") from err
 
     async def async_set_presence(self, home: bool) -> None:
         """Set home presence lock (Home/Away) with local redundancy check."""
@@ -998,7 +1005,14 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self.data["presence"] = target_state
             self.async_set_updated_data(self.data)
 
-        await self.client.set_presence(self.home_id, home)
+        try:
+            await self.client.set_presence(self.home_id, home)
+        except TadoAuthError as auth_err:
+            raise HomeAssistantError(
+                "Session Tado expirée : veuillez reconnecter votre compte dans Paramètres > Appareils et services > DomoLink-Tado."
+            ) from auth_err
+        except Exception as err:
+            raise HomeAssistantError(f"Erreur Tado (présence): {err}") from err
         self._last_home_state_time = 0.0
 
     def _check_automated_geofencing(self, current_presence: str | None = None) -> None:
@@ -1142,6 +1156,24 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 zone_id, target_temp=temp, termination_type=OVERLAY_NEXT_TIME_BLOCK
             )
 
+    async def _safe_request_refresh(self) -> None:
+        """Request a data refresh, swallowing any exception.
+
+        Service handlers (save_room_labels, save_room_sensors, set_valve_calibration_mode, etc.)
+        perform purely local operations first (persisting to config entry options), then call this
+        to update the coordinator data. If the Tado token is expired, _async_update_data raises
+        ConfigEntryAuthFailed which would propagate as an unhandled exception in the service call,
+        producing a cryptic ULID error code in the UI. This wrapper absorbs the error so local
+        operations always succeed; the coordinator will independently handle re-authentication.
+        """
+        try:
+            await self.async_request_refresh()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.debug(
+                "DomoLink-Tado: Rafraîchissement des données ignoré après opération locale (%s)",
+                err,
+            )
+
     async def async_set_temperature_offset(
         self, device_serial: str, offset: float, refresh: bool = True
     ) -> None:
@@ -1158,21 +1190,21 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.error("DomoLink-Tado: Erreur lors de l'application de l'offset sur %s: %s", device_serial, err)
             raise HomeAssistantError(f"Erreur Tado: {err}") from err
         if refresh:
-            await self.async_request_refresh()
+            await self._safe_request_refresh()
 
     async def async_save_room_labels(self, labels_dict: dict[str, Any]) -> None:
         """Save room labels to config entry options."""
         current_options = dict(self.entry.options)
         current_options[CONF_ROOM_LABELS] = labels_dict
         self.hass.config_entries.async_update_entry(self.entry, options=current_options)
-        await self.async_request_refresh()
+        await self._safe_request_refresh()
 
     async def async_save_room_sensors(self, sensors_dict: dict[str, Any]) -> None:
         """Save room external temperature sensors to config entry options."""
         current_options = dict(self.entry.options)
         current_options[CONF_ZONE_TEMP_ENTITIES] = sensors_dict
         self.hass.config_entries.async_update_entry(self.entry, options=current_options)
-        await self.async_request_refresh()
+        await self._safe_request_refresh()
 
     async def async_set_valve_calibration_mode(self, device_serial: str, mode: str) -> None:
         """Set calibration mode (AUTO or MANUAL) for a specific valve."""
@@ -1220,5 +1252,5 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     err,
                                 )
                             break
-        await self.async_request_refresh()
+        await self._safe_request_refresh()
 
