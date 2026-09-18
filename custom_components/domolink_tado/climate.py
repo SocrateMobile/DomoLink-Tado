@@ -278,6 +278,7 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
             "raw_inside_temperature": z.get("raw_inside_temperature"),
             "zone_temp_sensors": self.coordinator.entry.options.get(CONF_ZONE_TEMP_ENTITIES, {}).get(str(self.zone_id), []),
             "valve_calibration_modes": self.coordinator.entry.options.get(CONF_VALVE_CALIBRATION_MODES, {}),
+            "rate_limit": (self.coordinator.data or {}).get("rate_limit") or {},
         }
         if self.is_ac:
             attrs["ac_mode"] = z.get("ac_mode")

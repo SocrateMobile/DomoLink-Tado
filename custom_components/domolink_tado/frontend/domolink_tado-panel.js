@@ -298,6 +298,48 @@ class DomolinkTadoPanel extends HTMLElement {
     const outdoorVal = outdoorSensor && states[outdoorSensor]?.state;
     const outdoorTemp = outdoorVal && outdoorVal !== "unavailable" ? `${parseFloat(outdoorVal).toFixed(1)}°` : "--°";
 
+    // Extraction télémétrie Quota & Requêtes API Tado
+    let rateLimit = null;
+    for (const key of climateKeys) {
+      const entity = states[key];
+      if (entity?.attributes?.rate_limit && (entity.attributes.rate_limit.limit != null || entity.attributes.rate_limit.remaining != null || entity.attributes.rate_limit.used != null)) {
+        rateLimit = entity.attributes.rate_limit;
+        break;
+      }
+    }
+
+    if (!rateLimit) {
+      const remKey = Object.keys(states).find(
+        (k) => k.startsWith("sensor.") && k.includes("tado") && (k.includes("quota_remaining") || k.includes("restant"))
+      );
+      const limKey = Object.keys(states).find(
+        (k) => k.startsWith("sensor.") && k.includes("tado") && (k.includes("quota_limit") || k.includes("plafond"))
+      );
+      const usedKey = Object.keys(states).find(
+        (k) => k.startsWith("sensor.") && k.includes("tado") && (k.includes("quota_used") || k.includes("utilisees"))
+      );
+
+      const remVal = remKey && !isNaN(parseInt(states[remKey]?.state, 10)) ? parseInt(states[remKey].state, 10) : null;
+      const limVal = limKey && !isNaN(parseInt(states[limKey]?.state, 10)) ? parseInt(states[limKey].state, 10) : null;
+      const usedVal = usedKey && !isNaN(parseInt(states[usedKey]?.state, 10)) ? parseInt(states[usedKey].state, 10) : null;
+
+      if (remVal !== null || limVal !== null || usedVal !== null) {
+        rateLimit = {
+          limit: limVal,
+          remaining: remVal,
+          used: usedVal,
+          reset_seconds: remKey ? states[remKey]?.attributes?.reset_seconds : null,
+        };
+      }
+    }
+
+    const limitNum = rateLimit?.limit ?? 1000;
+    const remainingNum = rateLimit?.remaining != null ? Number(rateLimit.remaining) : null;
+    let usedNum = rateLimit?.used != null ? Number(rateLimit.used) : null;
+    if (usedNum === null && remainingNum !== null && limitNum !== null) {
+      usedNum = Math.max(0, limitNum - remainingNum);
+    }
+
     this._allLabels = labelsSet;
 
     return {
@@ -307,6 +349,12 @@ class DomolinkTadoPanel extends HTMLElement {
       active_count: activeCount,
       labels: Array.from(labelsSet),
       valveModes: valveModes,
+      rate_limit: {
+        limit: limitNum,
+        remaining: remainingNum,
+        used: usedNum,
+        reset_seconds: rateLimit?.reset_seconds,
+      },
     };
   }
 
@@ -474,6 +522,92 @@ class DomolinkTadoPanel extends HTMLElement {
           display: flex;
           align-items: center;
           gap: 6px;
+        }
+
+        #apiQuotaBadge {
+          cursor: pointer;
+          transition: all 0.2s ease;
+          background: rgba(14, 165, 233, 0.12);
+          border: 1px solid rgba(14, 165, 233, 0.25);
+        }
+
+        #apiQuotaBadge:hover {
+          background: rgba(14, 165, 233, 0.22);
+          transform: translateY(-1px);
+        }
+
+        /* ── Quota & API Telemetry Card ── */
+        .quota-stats-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+          gap: 14px;
+          margin-top: 16px;
+          margin-bottom: 16px;
+        }
+
+        .quota-stat-box {
+          background: rgba(0, 0, 0, 0.25);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 16px;
+          padding: 14px 16px;
+          display: flex;
+          flex-direction: column;
+          align-items: flex-start;
+          box-sizing: border-box;
+        }
+
+        .quota-stat-label {
+          font-size: 11px;
+          font-weight: 700;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          color: #94a3b8;
+          margin-bottom: 4px;
+        }
+
+        .quota-stat-value {
+          font-size: 26px;
+          font-weight: 800;
+          color: #ffffff;
+          letter-spacing: -0.5px;
+        }
+
+        .quota-stat-sub {
+          font-size: 11px;
+          color: #64748b;
+          margin-top: 2px;
+        }
+
+        .quota-progress-container {
+          background: rgba(0, 0, 0, 0.2);
+          border: 1px solid rgba(255, 255, 255, 0.06);
+          border-radius: 14px;
+          padding: 12px 16px;
+        }
+
+        .quota-progress-bar-bg {
+          width: 100%;
+          height: 10px;
+          background: rgba(255, 255, 255, 0.08);
+          border-radius: 10px;
+          overflow: hidden;
+          margin-bottom: 8px;
+        }
+
+        .quota-progress-bar-fill {
+          height: 100%;
+          background: linear-gradient(90deg, #10b981, #06b6d4);
+          border-radius: 10px;
+          transition: width 0.4s ease, background 0.4s ease;
+        }
+
+        .quota-progress-labels {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          font-size: 12px;
+          color: #94a3b8;
+          font-weight: 600;
         }
 
         /* ── Label Filters Bar ── */
@@ -1609,6 +1743,10 @@ class DomolinkTadoPanel extends HTMLElement {
             <button class="header-auth-btn" id="btnHeaderAuth" title="Lancer une ré-authentification Tado Device Flow">
               <span>🔑</span> AUTHENTIFICATION
             </button>
+            <div class="header-stat-badge" id="apiQuotaBadge" title="Requêtes API Tado : Faites / Restantes pour aujourd'hui (cliquez pour détails)">
+              <span style="font-size: 14px;">⚡</span>
+              <span id="api-quota-display">-- faites / -- rest.</span>
+            </div>
             <div class="header-stat-badge" id="outdoorBadge">
               <span>🌡️</span>
               <span id="outdoor-temp-display">--° EXT</span>
@@ -1668,6 +1806,47 @@ class DomolinkTadoPanel extends HTMLElement {
               </div>
               <div style="font-size: 13px; color: #cbd5e1; line-height: 1.5;">
                 En cas de perte de session ou de redémarrage Home Assistant nécessitant une validation, cliquez sur le bouton ci-dessus pour démarrer instantanément le protocole officiel Tado Device Flow.
+              </div>
+            </div>
+
+            <!-- Carte 0 bis : Quota & Télémétrie API Tado -->
+            <div class="settings-card" id="quotaSettingsCard">
+              <div class="settings-card-header">
+                <div>
+                  <h2 class="settings-card-title"><span>📊</span> Quota & Requêtes API Tado</h2>
+                  <p class="settings-card-desc">Suivi en direct de la consommation de vos requêtes API Tado (plafond journalier de 1000 requêtes).</p>
+                </div>
+                <div id="quotaStatusPill" class="tado-badge-pill" style="background: rgba(34, 197, 94, 0.15); color: #4ade80; border-color: rgba(34, 197, 94, 0.3);">
+                  Optimal
+                </div>
+              </div>
+
+              <div class="quota-stats-grid">
+                <div class="quota-stat-box">
+                  <div class="quota-stat-label">Requêtes Faites (Jour)</div>
+                  <div class="quota-stat-value" id="quotaValUsed">--</div>
+                  <div class="quota-stat-sub">appels effectués</div>
+                </div>
+                <div class="quota-stat-box">
+                  <div class="quota-stat-label">Requêtes Restantes</div>
+                  <div class="quota-stat-value" id="quotaValRemaining" style="color: #38bdf8;">--</div>
+                  <div class="quota-stat-sub">disponibles aujourd'hui</div>
+                </div>
+                <div class="quota-stat-box">
+                  <div class="quota-stat-label">Plafond Journalier</div>
+                  <div class="quota-stat-value" id="quotaValLimit" style="color: #94a3b8;">1000</div>
+                  <div class="quota-stat-sub">politique Tado perday</div>
+                </div>
+              </div>
+
+              <div class="quota-progress-container">
+                <div class="quota-progress-bar-bg">
+                  <div class="quota-progress-bar-fill" id="quotaProgressFill" style="width: 0%;"></div>
+                </div>
+                <div class="quota-progress-labels">
+                  <span id="quotaPercentLabel">0% utilisé</span>
+                  <span id="quotaResetLabel">Plafond journalier Tado réinitialisé toutes les 24h</span>
+                </div>
               </div>
             </div>
 
@@ -1982,6 +2161,13 @@ class DomolinkTadoPanel extends HTMLElement {
       viewSettings?.classList.add("active-view");
       viewRooms?.classList.remove("active-view");
       this._renderSettingsView();
+    });
+
+    this.querySelector("#apiQuotaBadge")?.addEventListener("click", () => {
+      tabSettings?.click();
+      setTimeout(() => {
+        this.querySelector("#quotaSettingsCard")?.scrollIntoView({ behavior: "smooth" });
+      }, 50);
     });
 
     // Bouton Authentification (Header & Settings)
@@ -2407,6 +2593,113 @@ class DomolinkTadoPanel extends HTMLElement {
 
     const activeBadge = this.querySelector("#active-heating-count");
     if (activeBadge) activeBadge.textContent = `${data.active_count} en chauffe`;
+
+    // Mise à jour Quota API Tado (Header et Carte Dédiée)
+    if (data.rate_limit) {
+      const rl = data.rate_limit;
+      const limit = rl.limit ?? 1000;
+      const remaining = rl.remaining;
+      const used = rl.used;
+
+      // 1. Header Badge
+      const quotaBadge = this.querySelector("#apiQuotaBadge");
+      const quotaDisplay = this.querySelector("#api-quota-display");
+      if (quotaDisplay) {
+        const usedTxt = used != null ? `${used}` : "--";
+        const remTxt = remaining != null ? `${remaining}` : (used != null && limit != null ? `${Math.max(0, limit - used)}` : "--");
+        quotaDisplay.textContent = `${usedTxt} faites / ${remTxt} rest.`;
+
+        if (quotaBadge) {
+          if (remaining != null && remaining <= 50) {
+            quotaBadge.style.borderColor = "rgba(239, 68, 68, 0.6)";
+            quotaBadge.style.color = "#f87171";
+            quotaBadge.title = `ALERTE QUOTA CRITIQUE : Plus que ${remaining} requêtes restantes aujourd'hui !`;
+          } else if (remaining != null && remaining <= 200) {
+            quotaBadge.style.borderColor = "rgba(245, 158, 11, 0.6)";
+            quotaBadge.style.color = "#fbbf24";
+            quotaBadge.title = `Attention : ${remaining} requêtes restantes aujourd'hui.`;
+          } else {
+            quotaBadge.style.borderColor = "";
+            quotaBadge.style.color = "";
+            quotaBadge.title = `Requêtes API Tado : ${usedTxt} faites / ${remTxt} restantes pour aujourd'hui (cliquez pour détails)`;
+          }
+        }
+      }
+
+      // 2. Settings Card
+      const quotaValUsed = this.querySelector("#quotaValUsed");
+      const quotaValRemaining = this.querySelector("#quotaValRemaining");
+      const quotaValLimit = this.querySelector("#quotaValLimit");
+      const quotaProgressFill = this.querySelector("#quotaProgressFill");
+      const quotaPercentLabel = this.querySelector("#quotaPercentLabel");
+      const quotaResetLabel = this.querySelector("#quotaResetLabel");
+      const quotaStatusPill = this.querySelector("#quotaStatusPill");
+
+      if (quotaValUsed) {
+        quotaValUsed.textContent = used != null ? `${used}` : "--";
+      }
+      if (quotaValRemaining) {
+        const remVal = remaining != null ? remaining : (used != null && limit != null ? Math.max(0, limit - used) : null);
+        quotaValRemaining.textContent = remVal != null ? `${remVal}` : "--";
+        if (remVal != null && remVal <= 50) {
+          quotaValRemaining.style.color = "#f87171";
+        } else if (remVal != null && remVal <= 200) {
+          quotaValRemaining.style.color = "#fbbf24";
+        } else {
+          quotaValRemaining.style.color = "#38bdf8";
+        }
+      }
+      if (quotaValLimit) {
+        quotaValLimit.textContent = `${limit}`;
+      }
+
+      if (quotaProgressFill && quotaPercentLabel) {
+        let percent = 0;
+        if (used != null && limit > 0) {
+          percent = Math.min(100, Math.max(0, Math.round((used / limit) * 100)));
+        } else if (remaining != null && limit > 0) {
+          percent = Math.min(100, Math.max(0, Math.round(((limit - remaining) / limit) * 100)));
+        }
+        quotaProgressFill.style.width = `${percent}%`;
+        quotaPercentLabel.textContent = `${percent}% consommé (${used ?? "--"} / ${limit})`;
+
+        if (percent >= 90) {
+          quotaProgressFill.style.background = "linear-gradient(90deg, #f59e0b, #ef4444)";
+          if (quotaStatusPill) {
+            quotaStatusPill.textContent = "Saturé (Critique)";
+            quotaStatusPill.style.background = "rgba(239, 68, 68, 0.15)";
+            quotaStatusPill.style.color = "#f87171";
+            quotaStatusPill.style.borderColor = "rgba(239, 68, 68, 0.3)";
+          }
+        } else if (percent >= 70) {
+          quotaProgressFill.style.background = "linear-gradient(90deg, #10b981, #f59e0b)";
+          if (quotaStatusPill) {
+            quotaStatusPill.textContent = "Élevé (Attention)";
+            quotaStatusPill.style.background = "rgba(245, 158, 11, 0.15)";
+            quotaStatusPill.style.color = "#fbbf24";
+            quotaStatusPill.style.borderColor = "rgba(245, 158, 11, 0.3)";
+          }
+        } else {
+          quotaProgressFill.style.background = "linear-gradient(90deg, #10b981, #06b6d4)";
+          if (quotaStatusPill) {
+            quotaStatusPill.textContent = "Optimal";
+            quotaStatusPill.style.background = "rgba(34, 197, 94, 0.15)";
+            quotaStatusPill.style.color = "#4ade80";
+            quotaStatusPill.style.borderColor = "rgba(34, 197, 94, 0.3)";
+          }
+        }
+      }
+
+      if (quotaResetLabel) {
+        if (rl.reset_seconds != null && rl.reset_seconds > 0) {
+          const hrs = Math.floor(rl.reset_seconds / 3600);
+          const mins = Math.floor((rl.reset_seconds % 3600) / 60);
+          quotaResetLabel.textContent = `Réinitialisation du quota dans ${hrs > 0 ? `${hrs}h ` : ""}${mins}min`;
+        } else {
+          quotaResetLabel.textContent = "Plafond journalier Tado réinitialisé toutes les 24h";
+        }
+      }
+    }
 
     this._renderFilterChips(data.labels);
 
@@ -2869,7 +3162,7 @@ class DomolinkTadoPanel extends HTMLElement {
       });
 
       calibBody.querySelectorAll("input[type='range']").forEach((slider) => {
-        const serial = slider.id.replace("sliderCalib_", "");
+        const serial = (slider.id || "").replace("sliderCalib_", "");
         const badge = calibBody.querySelector(`#badgeCalib_${serial}`);
         slider.addEventListener("input", () => {
           const val = parseFloat(slider.value).toFixed(1);

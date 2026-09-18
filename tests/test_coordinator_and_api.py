@@ -222,6 +222,7 @@ from custom_components.domolink_tado.sensor import (
     DomolinkTadoZoneHeatingRateSensor,
     DomolinkTadoQuotaRemainingSensor,
     DomolinkTadoQuotaLimitSensor,
+    DomolinkTadoQuotaUsedSensor,
     DomolinkTadoZoneTempSensor,
     DomolinkTadoZoneHumiditySensor,
 )
@@ -1189,6 +1190,8 @@ class TestRateLimitHeaderParsing(unittest.IsolatedAsyncioTestCase):
         info = self.client.rate_limit_info
         self.assertEqual(info["limit"], 100)
         self.assertEqual(info["remaining"], 42)
+        self.assertEqual(info["used"], 58)
+        self.assertEqual(info["requests_count"], 0)
         self.assertEqual(info["reset_seconds"], 1200)
         self.assertIsNotNone(info["last_update"])
 
@@ -1248,6 +1251,8 @@ class TestQuotaSensors(unittest.TestCase):
             "rate_limit": {
                 "limit": 100,
                 "remaining": 42,
+                "used": 58,
+                "requests_count": 58,
                 "reset_seconds": 3600,
                 "last_update": "2026-09-17T22:00:00",
             }
@@ -1259,6 +1264,8 @@ class TestQuotaSensors(unittest.TestCase):
         self.assertEqual(sensor.native_value, 42)
         attrs = sensor.extra_state_attributes
         self.assertEqual(attrs["quota_limit"], 100)
+        self.assertEqual(attrs["requests_used"], 58)
+        self.assertEqual(attrs["requests_count"], 58)
         self.assertEqual(attrs["reset_seconds"], 3600)
         self.assertEqual(attrs["last_update"], "2026-09-17T22:00:00")
 
@@ -1266,6 +1273,11 @@ class TestQuotaSensors(unittest.TestCase):
         sensor = DomolinkTadoQuotaLimitSensor(self.coordinator)
         self.assertEqual(sensor.unique_id, "domolink_tado_631338_quota_limit")
         self.assertEqual(sensor.native_value, 100)
+
+    def test_quota_used_sensor(self):
+        sensor = DomolinkTadoQuotaUsedSensor(self.coordinator)
+        self.assertEqual(sensor.unique_id, "domolink_tado_631338_quota_used")
+        self.assertEqual(sensor.native_value, 58)
 
 
 class TestExternalSensorsAndAutoCalibration(unittest.IsolatedAsyncioTestCase):
