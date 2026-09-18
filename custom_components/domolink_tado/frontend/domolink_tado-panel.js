@@ -45,6 +45,21 @@ function interpolateColor(t) {
   return { r: 217, g: 119, b: 6 };
 }
 
+function cleanRoomName(rawName) {
+  if (!rawName) return "";
+  let name = String(rawName).replace(/^Tado\s+/i, "").trim();
+  const words = name.split(/\s+/);
+  if (words.length >= 2 && words.length % 2 === 0) {
+    const half = words.length / 2;
+    const firstHalf = words.slice(0, half).join(" ");
+    const secondHalf = words.slice(half).join(" ");
+    if (firstHalf.toLowerCase() === secondHalf.toLowerCase()) {
+      return firstHalf;
+    }
+  }
+  return name;
+}
+
 function getCardBackgroundStyle(zone) {
   const isOff = zone.state === "off";
   if (isOff) {
@@ -231,7 +246,7 @@ class DomolinkTadoPanel extends HTMLElement {
 
       const attrs = entity.attributes || {};
       const zoneId = attrs.zone_id || key;
-      const name = attrs.friendly_name?.replace(/^Tado\s+/i, "") || key;
+      const name = cleanRoomName(attrs.friendly_name) || key;
       const currentTemp = attrs.current_temperature != null ? parseFloat(attrs.current_temperature).toFixed(1) : "--";
       const targetTemp = attrs.temperature != null ? parseFloat(attrs.temperature).toFixed(1) : (entity.state === "off" ? "Off" : "--");
       const humidity = attrs.current_humidity != null ? `${attrs.current_humidity}%` : "--%";
@@ -1445,35 +1460,75 @@ class DomolinkTadoPanel extends HTMLElement {
         }
 
         .room-label-item {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
+          display: grid;
+          grid-template-columns: 240px 1fr 1.6fr;
+          align-items: start;
           background: #0f172a;
           border-radius: 14px;
-          padding: 12px 18px;
+          padding: 16px 20px;
           border: 1px solid rgba(255, 255, 255, 0.08);
-          gap: 16px;
-          flex-wrap: wrap;
+          gap: 24px;
+          box-sizing: border-box;
+        }
+
+        @media (max-width: 1200px) {
+          .room-label-item {
+            grid-template-columns: 200px 1fr 1.4fr;
+            gap: 16px;
+          }
+        }
+
+        @media (max-width: 960px) {
+          .room-label-item {
+            grid-template-columns: 1fr;
+            gap: 14px;
+          }
         }
 
         .room-label-item-left {
           display: flex;
           align-items: center;
           gap: 12px;
-          min-width: 180px;
+          min-width: 0;
+          padding-top: 4px;
         }
 
         .room-label-item-name {
           font-weight: 800;
-          font-size: 14px;
+          font-size: 15px;
+          color: #ffffff;
+          line-height: 1.3;
+          word-break: break-word;
+        }
+
+        .room-section-block {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+          min-width: 0;
+        }
+
+        .room-section-title {
+          font-size: 12px;
+          color: #94a3b8;
+          font-weight: 700;
+          margin-bottom: 2px;
+          letter-spacing: 0.3px;
         }
 
         .room-tags-editor {
           display: flex;
-          align-items: center;
+          flex-direction: column;
           gap: 8px;
-          flex: 1;
+          min-width: 0;
+        }
+
+        .pills-container {
+          display: flex;
+          align-items: center;
+          gap: 6px;
           flex-wrap: wrap;
+          width: 100%;
         }
 
         .tag-pill-badge {
@@ -1484,7 +1539,7 @@ class DomolinkTadoPanel extends HTMLElement {
           border-radius: 20px;
           font-size: 11px;
           font-weight: 700;
-          display: flex;
+          display: inline-flex;
           align-items: center;
           gap: 6px;
         }
@@ -1493,50 +1548,65 @@ class DomolinkTadoPanel extends HTMLElement {
           cursor: pointer;
           opacity: 0.7;
           font-size: 13px;
+          transition: opacity 0.2s, color 0.2s;
         }
         .tag-remove-btn:hover {
           opacity: 1;
           color: #ef4444;
         }
 
+        .tag-input-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          width: 100%;
+        }
+
         .add-tag-input {
+          height: 36px;
+          box-sizing: border-box;
           background: #1e293b;
-          border: 1px solid rgba(255, 255, 255, 0.1);
+          border: 1px solid rgba(255, 255, 255, 0.12);
           border-radius: 10px;
-          padding: 6px 10px;
+          padding: 0 12px;
           color: #ffffff;
-          font-size: 11px;
+          font-size: 12px;
           outline: none;
-          width: 130px;
+          width: 140px;
+          max-width: 100%;
+          transition: border-color 0.2s;
+        }
+        .add-tag-input:focus {
+          border-color: #0284c7;
         }
 
         .btn-add-tag {
+          height: 36px;
+          box-sizing: border-box;
           background: #0284c7;
           border: none;
           color: #ffffff;
           border-radius: 10px;
-          padding: 6px 12px;
-          font-size: 11px;
+          padding: 0 14px;
+          font-size: 12px;
           font-weight: 700;
           cursor: pointer;
+          white-space: nowrap;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.2s ease;
         }
-
-        .room-section-block {
-          margin-top: 8px;
-        }
-
-        .room-section-title {
-          font-size: 11px;
-          color: #94a3b8;
-          font-weight: 700;
-          margin-bottom: 4px;
+        .btn-add-tag:hover {
+          background: #0369a1;
+          transform: translateY(-1px);
         }
 
         .room-sensors-editor {
           display: flex;
-          align-items: center;
+          flex-direction: column;
           gap: 8px;
-          flex-wrap: wrap;
+          min-width: 0;
         }
 
         .sensor-pill-badge {
@@ -1556,41 +1626,84 @@ class DomolinkTadoPanel extends HTMLElement {
           cursor: pointer;
           opacity: 0.7;
           font-size: 13px;
+          transition: opacity 0.2s, color 0.2s;
         }
         .sensor-remove-btn:hover {
           opacity: 1;
           color: #ef4444;
         }
 
-        .sensor-select-input {
+        .sensor-adder-controls {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          flex-wrap: wrap;
+          width: 100%;
+        }
+
+        .sensor-autocomplete-input {
+          height: 36px;
+          box-sizing: border-box;
           background: #1e293b;
-          border: 1px solid rgba(255, 255, 255, 0.1);
+          border: 1px solid rgba(255, 255, 255, 0.12);
           border-radius: 10px;
-          padding: 6px 10px;
+          padding: 0 12px;
           color: #ffffff;
-          font-size: 11px;
+          font-size: 12px;
           outline: none;
-          max-width: 250px;
+          width: 180px;
+          min-width: 140px;
+          transition: border-color 0.2s;
+        }
+        .sensor-autocomplete-input:focus {
+          border-color: #10b981;
+        }
+
+        .sensor-select-input {
+          height: 36px;
+          box-sizing: border-box;
+          background: #1e293b;
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          border-radius: 10px;
+          padding: 0 10px;
+          color: #ffffff;
+          font-size: 12px;
+          outline: none;
+          max-width: 220px;
+          min-width: 160px;
+          transition: border-color 0.2s;
+        }
+        .sensor-select-input:focus {
+          border-color: #10b981;
         }
 
         .btn-add-sensor {
+          height: 36px;
+          box-sizing: border-box;
           background: #059669;
           border: none;
           color: #ffffff;
           border-radius: 10px;
-          padding: 6px 12px;
-          font-size: 11px;
+          padding: 0 14px;
+          font-size: 12px;
           font-weight: 700;
           cursor: pointer;
+          white-space: nowrap;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          transition: all 0.2s ease;
         }
         .btn-add-sensor:hover {
           background: #10b981;
+          transform: translateY(-1px);
         }
 
         .max-sensors-notice {
-          font-size: 11px;
+          font-size: 12px;
           color: #94a3b8;
           font-style: italic;
+          line-height: 36px;
         }
 
         .calib-avg-badge {
@@ -2927,7 +3040,13 @@ class DomolinkTadoPanel extends HTMLElement {
 
     const listEl = this.querySelector("#roomLabelsList");
     if (listEl) {
-      listEl.innerHTML = data.zones
+      const datalistHtml = `
+        <datalist id="allTempSensorsDatalist">
+          ${allTempSensors.map((s) => `<option value="${s.id}">${s.name} (${s.temp})</option>`).join("")}
+        </datalist>
+      `;
+
+      listEl.innerHTML = datalistHtml + data.zones
         .map((z) => {
           const zid = String(z.zone_id);
           const currentTags = this._settingsDraft[zid] || [];
@@ -2961,13 +3080,19 @@ class DomolinkTadoPanel extends HTMLElement {
 
           const sensorAdderHtml = currentSensors.length < 4
             ? `
-              <select class="sensor-select-input" id="selectSensor_${zid}">
-                <option value="">-- Associer un capteur (${availableForRoom.length} dispo) --</option>
-                ${availableForRoom.map((s) => `<option value="${s.id}">${s.name} (${s.temp})</option>`).join("")}
-              </select>
-              <button class="btn-add-sensor" data-zid="${zid}">+ Associer</button>
+              <div class="sensor-adder-controls">
+                <input type="text" class="sensor-autocomplete-input" id="inputSensor_${zid}" list="allTempSensorsDatalist" placeholder="🔍 Taper pour chercher..." autocomplete="off" />
+                <select class="sensor-select-input" id="selectSensor_${zid}">
+                  <option value="">-- Liste (${availableForRoom.length} dispo) --</option>
+                  ${availableForRoom.map((s) => `<option value="${s.id}">${s.name} (${s.temp})</option>`).join("")}
+                </select>
+                <button class="btn-add-sensor" data-zid="${zid}">+ Associer</button>
+              </div>
             `
             : `<span class="max-sensors-notice">✓ Limite de 4 capteurs atteinte</span>`;
+
+          const tagsPillsHtml = tagsHtml ? `<div class="pills-container">${tagsHtml}</div>` : "";
+          const sensorsPillsHtml = sensorsHtml ? `<div class="pills-container">${sensorsHtml}</div>` : "";
 
           return `
           <div class="room-label-item">
@@ -2979,16 +3104,18 @@ class DomolinkTadoPanel extends HTMLElement {
             <div class="room-section-block">
               <div class="room-section-title">🏷️ Étiquettes (Filtres) :</div>
               <div class="room-tags-editor">
-                ${tagsHtml}
-                <input type="text" class="add-tag-input" id="inputTag_${zid}" placeholder="Ajouter un tag..." />
-                <button class="btn-add-tag" data-zid="${zid}">+ Ajouter</button>
+                ${tagsPillsHtml}
+                <div class="tag-input-row">
+                  <input type="text" class="add-tag-input" id="inputTag_${zid}" placeholder="Ajouter un tag..." />
+                  <button class="btn-add-tag" data-zid="${zid}">+ Ajouter</button>
+                </div>
               </div>
             </div>
 
             <div class="room-section-block">
               <div class="room-section-title">🌡️ Capteurs de Température (${currentSensors.length}/4 max) :</div>
               <div class="room-sensors-editor">
-                ${sensorsHtml}
+                ${sensorsPillsHtml}
                 ${sensorAdderHtml}
               </div>
             </div>
@@ -3024,6 +3151,17 @@ class DomolinkTadoPanel extends HTMLElement {
         });
       });
 
+      listEl.querySelectorAll(".add-tag-input").forEach((input) => {
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            const zid = input.id.replace("inputTag_", "");
+            const btn = listEl.querySelector(`.btn-add-tag[data-zid="${zid}"]`);
+            btn?.click();
+          }
+        });
+      });
+
       listEl.querySelectorAll(".sensor-remove-btn").forEach((btn) => {
         btn.addEventListener("click", () => {
           const zid = btn.dataset.zid;
@@ -3038,14 +3176,55 @@ class DomolinkTadoPanel extends HTMLElement {
       listEl.querySelectorAll(".btn-add-sensor").forEach((btn) => {
         btn.addEventListener("click", () => {
           const zid = btn.dataset.zid;
+          const input = listEl.querySelector(`#inputSensor_${zid}`);
           const select = listEl.querySelector(`#selectSensor_${zid}`);
-          const val = select ? select.value : "";
+          let val = (input ? input.value.trim() : "") || (select ? select.value : "");
+          // Vérification si la valeur entrée correspond à un friendly_name ou un entity_id
+          const found = allTempSensors.find(
+            (s) => s.id.toLowerCase() === val.toLowerCase() || s.name.toLowerCase() === val.toLowerCase()
+          );
+          if (found) val = found.id;
+
           if (val) {
             if (!this._sensorDraft[zid]) this._sensorDraft[zid] = [];
             if (!this._sensorDraft[zid].includes(val) && this._sensorDraft[zid].length < 4) {
               this._sensorDraft[zid].push(val);
             }
             this._renderSettingsView();
+          }
+        });
+      });
+
+      listEl.querySelectorAll(".sensor-autocomplete-input").forEach((input) => {
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            const zid = input.id.replace("inputSensor_", "");
+            const btn = listEl.querySelector(`.btn-add-sensor[data-zid="${zid}"]`);
+            btn?.click();
+          }
+        });
+        input.addEventListener("input", () => {
+          const zid = input.id.replace("inputSensor_", "");
+          const select = listEl.querySelector(`#selectSensor_${zid}`);
+          if (select) {
+            const val = input.value.trim().toLowerCase();
+            const match = allTempSensors.find(
+              (s) => s.id.toLowerCase() === val || s.name.toLowerCase() === val
+            );
+            if (match) {
+              select.value = match.id;
+            }
+          }
+        });
+      });
+
+      listEl.querySelectorAll(".sensor-select-input").forEach((select) => {
+        select.addEventListener("change", () => {
+          const zid = select.id.replace("selectSensor_", "");
+          const input = listEl.querySelector(`#inputSensor_${zid}`);
+          if (input && select.value) {
+            input.value = select.value;
           }
         });
       });
