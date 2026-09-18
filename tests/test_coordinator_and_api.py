@@ -1931,6 +1931,19 @@ class TestAuditFixes(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ConfigEntryAuthFailed):
             await DomolinkTadoCoordinator.async_set_valve_calibration_mode(coordinator, "VA001", CALIBRATION_MODE_AUTO)
 
+    def test_services_yaml_is_valid(self):
+        """Test that services.yaml is valid YAML and defines expected services."""
+        import yaml
+        from pathlib import Path
+        yaml_path = Path(__file__).parent.parent / "custom_components" / "domolink_tado" / "services.yaml"
+        with open(yaml_path, "r", encoding="utf-8") as f:
+            services = yaml.safe_load(f)
+        self.assertIsInstance(services, dict)
+        self.assertIn("save_room_labels", services)
+        self.assertIn("save_room_sensors", services)
+        self.assertIn("set_valve_calibration_mode", services)
+
+
 
 
 
