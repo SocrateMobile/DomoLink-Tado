@@ -44,6 +44,7 @@ async def async_setup_entry(
     if entry.options.get(CONF_SHOW_QUOTA_SENSORS, DEFAULT_SHOW_QUOTA_SENSORS):
         entities.append(DomolinkTadoQuotaRemainingSensor(coordinator))
         entities.append(DomolinkTadoQuotaLimitSensor(coordinator))
+        entities.append(DomolinkTadoQuotaUsedSensor(coordinator))
 
     # 2. Zone Sensors
     zones = coordinator.data.get("zones", {})
@@ -206,6 +207,8 @@ class DomolinkTadoQuotaRemainingSensor(CoordinatorEntity[DomolinkTadoCoordinator
         rl = (self.coordinator.data or {}).get("rate_limit") or {}
         return {
             "quota_limit": rl.get("limit"),
+            "requests_used": rl.get("used"),
+            "requests_count": rl.get("requests_count"),
             "reset_seconds": rl.get("reset_seconds"),
             "last_update": rl.get("last_update"),
         }
@@ -235,6 +238,32 @@ class DomolinkTadoQuotaLimitSensor(CoordinatorEntity[DomolinkTadoCoordinator], S
     @property
     def native_value(self) -> int | None:
         return ((self.coordinator.data or {}).get("rate_limit") or {}).get("limit")
+
+
+class DomolinkTadoQuotaUsedSensor(CoordinatorEntity[DomolinkTadoCoordinator], SensorEntity):
+    """Sensor tracking used Tado API requests for today (limit - remaining)."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "req"
+    _attr_icon = "mdi:counter"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_quota_used"
+        self._attr_name = "Tado Requêtes API Utilisées"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
+            name=f"Tado {self.coordinator.home_name}",
+            manufacturer="Tado (DomoLink)",
+            model="Home Hub",
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        return ((self.coordinator.data or {}).get("rate_limit") or {}).get("used")
 
 
 # ── Zone Sensors ────────────────────────────────────────────

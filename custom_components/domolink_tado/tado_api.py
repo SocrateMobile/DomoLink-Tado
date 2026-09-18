@@ -80,6 +80,7 @@ class TadoClient:
         self.rate_limit_remaining: int | None = None
         self.rate_limit_reset_seconds: int | None = None
         self.rate_limit_last_update: float | None = None
+        self.requests_count: int = 0
 
     @staticmethod
     async def request_device_code(session: aiohttp.ClientSession) -> TadoDeviceAuthResponse:
@@ -301,9 +302,19 @@ class TadoClient:
     @property
     def rate_limit_info(self) -> dict[str, Any]:
         """Return structured rate limit telemetry."""
+        limit = self.rate_limit_limit
+        rem = self.rate_limit_remaining
+        used = None
+        if limit is not None and rem is not None:
+            used = max(0, limit - rem)
+        elif self.requests_count > 0:
+            used = self.requests_count
+
         return {
-            "limit": self.rate_limit_limit,
-            "remaining": self.rate_limit_remaining,
+            "limit": limit,
+            "remaining": rem,
+            "used": used,
+            "requests_count": self.requests_count,
             "reset_seconds": self.rate_limit_reset_seconds,
             "last_update": self.rate_limit_last_update,
         }
@@ -328,6 +339,7 @@ class TadoClient:
         for attempt in range(4):
             _rate_limit_wait: float | None = None
             try:
+                self.requests_count += 1
                 async with self.session.post(TADO_TOKEN_URL, data=data, headers=headers) as resp:
                     if resp.status == 429:
                         _rate_limit_wait = self._calculate_rate_limit_delay(resp, attempt, default_base=3.0, max_delay=30.0)
@@ -399,6 +411,7 @@ class TadoClient:
         for attempt in range(5):
             _rate_limit_wait: float | None = None
             try:
+                self.requests_count += 1
                 async with self.session.request(
                     method, url, json=json_data, params=params, headers=headers
                 ) as resp:
