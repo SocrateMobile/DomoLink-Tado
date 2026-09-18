@@ -3797,7 +3797,7 @@ if (!customElements.get("domolink-tado-panel")) {
   customElements.define("domolink-tado-panel", DomolinkTadoPanel);
 }
 if (!customElements.get("domolink_tado-panel")) {
-  customElements.define("domolink_tado-panel", DomolinkTadoPanel);
+  customElements.define("domolink_tado-panel", class extends DomolinkTadoPanel {});
 }
 if (!customElements.get("domolink-tado-card")) {
   customElements.define("domolink-tado-card", DomolinkTadoCard);
