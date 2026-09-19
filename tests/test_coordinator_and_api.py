@@ -2085,3 +2085,127 @@ class TestAuditFixes(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call_patch["target_temperature"], 25.0)
 
 
+class TestV1515RateLimitAndJWTHomeDiscovery(unittest.IsolatedAsyncioTestCase):
+    """Unit tests for v1.5.15: JWT Home ID auto-discovery and API circuit-breaker."""
+
+    def test_jwt_home_id_extraction_tado_homes(self):
+        """Test extract_home_id_from_token with standard tado_homes claim."""
+        import base64
+        import json
+        from custom_components.domolink_tado.tado_api import TadoClient
+
+        payload = {
+            "sub": "user_abc",
+            "email": "test@example.com",
+            "tado_homes": [{"id": 98765, "name": "Maison Campagne"}],
+        }
+        b64 = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+        fake_jwt = f"eyJhbGciOiJIUzI1NiJ9.{b64}.signature"
+
+        home_id, home_name = TadoClient.extract_home_id_from_token(fake_jwt)
+        self.assertEqual(home_id, 98765)
+        self.assertEqual(home_name, "Maison Campagne")
+
+    def test_jwt_home_id_extraction_fallback_claims(self):
+        """Test extract_home_id_from_token with fallback claims (homeId, homes)."""
+        import base64
+        import json
+        from custom_components.domolink_tado.tado_api import TadoClient
+
+        # Fallback 1: homeId
+        p1 = {"sub": "user_abc", "homeId": 55443}
+        b64_1 = base64.urlsafe_b64encode(json.dumps(p1).encode()).decode().rstrip("=")
+        jwt1 = f"header.{b64_1}.sig"
+        h1, n1 = TadoClient.extract_home_id_from_token(jwt1)
+        self.assertEqual(h1, 55443)
+        self.assertIsNone(n1)
+
+        # Fallback 2: homes list of ints
+        p2 = {"homes": [33221]}
+        b64_2 = base64.urlsafe_b64encode(json.dumps(p2).encode()).decode().rstrip("=")
+        jwt2 = f"header.{b64_2}.sig"
+        h2, _ = TadoClient.extract_home_id_from_token(jwt2)
+        self.assertEqual(h2, 33221)
+
+    def test_jwt_home_id_extraction_invalid(self):
+        """Test extract_home_id_from_token with corrupt or missing token."""
+        from custom_components.domolink_tado.tado_api import TadoClient
+
+        self.assertEqual(TadoClient.extract_home_id_from_token(""), (None, None))
+        self.assertEqual(TadoClient.extract_home_id_from_token("not-a-jwt"), (None, None))
+        self.assertEqual(TadoClient.extract_home_id_from_token("a.bad_base64!!!.c"), (None, None))
+
+    async def test_circuit_breaker_activates_on_quota_exhausted(self):
+        """Test circuit-breaker triggers immediately when r=0 or reset_seconds > 60 without 5 retries."""
+        import time
+        from custom_components.domolink_tado.tado_api import TadoClient, TadoRateLimitError
+
+        session = MagicMock()
+        resp = MagicMock()
+        resp.status = 429
+        resp.headers = {
+            "RateLimit": '"perday";r=0;t=7200',
+            "RateLimit-Policy": "100;w=86400",
+        }
+        session.request.return_value.__aenter__.return_value = resp
+
+        client = TadoClient(session, access_token="fake_token")
+        self.assertEqual(client.rate_limited_until, 0.0)
+
+        # First request: should parse 429, set circuit breaker to ~now+7200, and immediately raise
+        start_t = time.time()
+        with self.assertRaises(TadoRateLimitError) as ctx:
+            await client._request("GET", "/test_endpoint")
+
+        self.assertGreater(client.rate_limited_until, start_t + 7000)
+        self.assertEqual(session.request.call_count, 1)  # Only 1 attempt! Did NOT retry 5 times!
+
+        # Second request: circuit breaker should block locally with 0 network calls!
+        with self.assertRaises(TadoRateLimitError):
+            await client._request("GET", "/test_endpoint")
+
+        self.assertEqual(session.request.call_count, 1)  # Still 1! No new network request was made!
+
+    async def test_circuit_breaker_blocks_refresh_token(self):
+        """Test async_refresh_token rejects locally when circuit breaker is active."""
+        import time
+        from custom_components.domolink_tado.tado_api import TadoClient, TadoRateLimitError
+
+        session = MagicMock()
+        client = TadoClient(session, refresh_token="dummy_refresh")
+        client.rate_limited_until = time.time() + 600
+
+        with self.assertRaises(TadoRateLimitError):
+            await client.async_refresh_token()
+
+        session.post.assert_not_called()
+
+    async def test_coordinator_serves_cache_during_circuit_breaker(self):
+        """Test coordinator serves cached data and does not fail when circuit breaker is active."""
+        import time
+        from custom_components.domolink_tado.coordinator import DomolinkTadoCoordinator
+        from custom_components.domolink_tado.tado_api import TadoClient
+
+        session = MagicMock()
+        client = TadoClient(session, access_token="tok")
+        client.rate_limited_until = time.time() + 500
+
+        entry = MagicMock()
+        entry.options = {}
+        coordinator = DomolinkTadoCoordinator(
+            hass=MagicMock(),
+            entry=entry,
+            client=client,
+            home_id=123,
+            home_name="Maison",
+        )
+        cached_data = {"home_id": 123, "zones": {"1": {"name": "Salon"}}}
+        coordinator.data = cached_data
+
+        data = await coordinator._async_update_data()
+        self.assertEqual(data, cached_data)
+        self.assertEqual(coordinator._consecutive_failures, 0)
+        # Network call was skipped
+        session.request.assert_not_called()
+
+
