@@ -75,7 +75,7 @@ from .physics import (
     calculate_mold_risk_problem,
     calculate_ventilation_recommended,
 )
-from .tado_api import TadoAuthError, TadoClient, TadoError
+from .tado_api import TadoAuthError, TadoClient, TadoError, TadoRateLimitError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -181,6 +181,40 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Fetch all zone states with smart metadata, weather, and presence caching."""
         try:
             now = time.time()
+            # 0. Circuit-breaker : si le quota Tado est épuisé, servir immédiatement le cache local sans appel réseau
+            rate_limited_until = getattr(self.client, "rate_limited_until", 0.0)
+            if isinstance(rate_limited_until, (int, float)) and rate_limited_until > now:
+                remaining_cooldown = rate_limited_until - now
+                _LOGGER.warning(
+                    "DomoLink-Tado: Disjoncteur API actif (quota Tado épuisé). Données servies depuis le cache local (pause restante: %.0fs).",
+                    remaining_cooldown,
+                )
+                self.update_interval = timedelta(seconds=min(max(int(remaining_cooldown) + 5, 60), 900))
+                if self.data:
+                    return self.data
+                return {
+                    "home_id": self.home_id,
+                    "home_name": self.home_name,
+                    "zones": {},
+                    "devices": {},
+                    "weather": {},
+                    "home_state": {},
+                    "presence": "HOME",
+                    "active_heating_zones": 0,
+                    "total_heating_power": 0.0,
+                    "rate_limit": self.client.rate_limit_info if hasattr(self.client, "rate_limit_info") else {},
+                    "last_update": datetime.now().isoformat(),
+                }
+
+            # Mode Eco-quota : si le quota restant est critique (< 20 requêtes), économiser les requêtes secondaires
+            rate_limit_rem = getattr(self.client, "rate_limit_remaining", None)
+            low_quota = (
+                isinstance(rate_limit_rem, (int, float))
+                and rate_limit_rem < 20
+            )
+            weather_cache_ttl = 3600 if low_quota else 900
+            home_state_cache_ttl = 1800 if low_quota else 300
+
             # 1. Cache zones et matériel pendant 30 minutes pour éviter le rate limit Tado (429)
             if not self._zones_raw or not self._devices_raw or (now - self._last_discovery_time > 1800):
                 try:
@@ -201,16 +235,16 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             states_res = await self.client.get_zone_states(self.home_id)
             zone_states = (states_res or {}).get("zoneStates", {})
 
-            # 3. Météo mise en cache pendant 15 minutes (900s)
-            if not self._weather_raw or (now - self._last_weather_time > 900):
+            # 3. Météo mise en cache pendant 15 minutes (900s) ou 60 minutes si low_quota
+            if not self._weather_raw or (now - self._last_weather_time > weather_cache_ttl):
                 try:
                     self._weather_raw = await self.client.get_weather(self.home_id) or {}
                     self._last_weather_time = now
                 except Exception as err:
                     _LOGGER.debug("DomoLink-Tado: Échec rafraîchissement météo: %s", err)
 
-            # 4. État du domicile (présence) mis en cache pendant 5 minutes (300s)
-            if not self._home_state_raw or (now - self._last_home_state_time > 300):
+            # 4. État du domicile (présence) mis en cache pendant 5 minutes (300s) ou 30 minutes si low_quota
+            if not self._home_state_raw or (now - self._last_home_state_time > home_state_cache_ttl):
                 try:
                     self._home_state_raw = await self.client.get_home_state(self.home_id) or {}
                     self._last_home_state_time = now
@@ -240,8 +274,8 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             preheat_mode = self.entry.options.get(CONF_PREHEAT_MODE, DEFAULT_PREHEAT_MODE)
             max_preheat_dur = self.entry.options.get(CONF_PREHEAT_MAX_DURATION, DEFAULT_PREHEAT_MAX_DURATION)
 
-            # M-6: Pré-chargement asynchrone et concurrent des plannings si préchauffe active
-            if preheat_enabled:
+            # M-6: Pré-chargement asynchrone et concurrent des plannings si préchauffe active (ignoré si low_quota)
+            if preheat_enabled and not low_quota:
                 zones_needing_sched = [
                     z.get("id") for z in self._zones_raw
                     if z.get("id") is not None
@@ -607,9 +641,13 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "labels": room_labels,
                 }
 
-            # Polling adaptatif : 60s si chauffe active, 300s (5 min) si tout est au repos (respect quota Tado)
+            # Polling adaptatif : 600s si low_quota, sinon 60s si chauffe active, 300s (5 min) si tout est au repos
             adaptive = self.entry.options.get(CONF_ADAPTIVE_POLLING, True)
-            if adaptive:
+            if low_quota:
+                new_interval = 600
+                if self.update_interval != timedelta(seconds=new_interval):
+                    self.update_interval = timedelta(seconds=new_interval)
+            elif adaptive:
                 new_interval = 60 if (active_heating_count > 0 or any(zd.get("is_overlay_active") for zd in zones_data.values())) else 300
                 if self.update_interval != timedelta(seconds=new_interval):
                     self.update_interval = timedelta(seconds=new_interval)
@@ -650,6 +688,28 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         except TadoAuthError as err:
             _LOGGER.error("Erreur d'authentification auprès de Tado: %s", err)
             raise ConfigEntryAuthFailed(f"Session Tado expirée: {err}") from err
+        except TadoRateLimitError as err:
+            _LOGGER.warning(
+                "DomoLink-Tado: Quota API Tado dépassé (%s). Données servies depuis le cache local.",
+                err,
+            )
+            cooldown = err.reset_seconds if err.reset_seconds and err.reset_seconds > 0 else 300.0
+            self.update_interval = timedelta(seconds=min(max(int(cooldown) + 5, 60), 900))
+            if self.data:
+                return self.data
+            return {
+                "home_id": self.home_id,
+                "home_name": self.home_name,
+                "zones": {},
+                "devices": {},
+                "weather": {},
+                "home_state": {},
+                "presence": "HOME",
+                "active_heating_zones": 0,
+                "total_heating_power": 0.0,
+                "rate_limit": self.client.rate_limit_info if hasattr(self.client, "rate_limit_info") else {},
+                "last_update": datetime.now().isoformat(),
+            }
         except (TadoError, aiohttp.ClientError, TimeoutError, asyncio.TimeoutError) as err:
             self._consecutive_failures += 1
             if self.data and self._consecutive_failures <= 3:

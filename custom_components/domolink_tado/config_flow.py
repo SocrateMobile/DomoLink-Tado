@@ -70,6 +70,7 @@ from .tado_api import (
     TadoDeviceFlowExpired,
     TadoDeviceFlowPending,
     TadoError,
+    TadoRateLimitError,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -137,9 +138,30 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     except (ValueError, TypeError):
                         pass
 
-                # 2. Récupération automatique du profil et du domicile si non fourni manuellement
+                # 2. Découverte automatique instantanée via le jeton OAuth JWT (0 requête API consommée !)
+                if home_id is None and tokens.get("access_token"):
+                    jwt_id, jwt_name = TadoClient.extract_home_id_from_token(tokens["access_token"])
+                    if jwt_id:
+                        _LOGGER.info(
+                            "DomoLink-Tado: Home ID %s (%s) extrait automatiquement du jeton OAuth JWT (0 requête API consommée)!",
+                            jwt_id,
+                            jwt_name or "Tado Home",
+                        )
+                        home_id = jwt_id
+                        if jwt_name:
+                            home_name = jwt_name
+
+                # 3. Récupération via /me uniquement si non trouvé dans le jeton ni fourni manuellement
                 if home_id is None:
-                    me = await client.get_me()
+                    try:
+                        me = await asyncio.wait_for(client.get_me(), timeout=10.0)
+                    except (TadoRateLimitError, TadoError, asyncio.TimeoutError) as err:
+                        _LOGGER.warning(
+                            "DomoLink-Tado: Impossible de récupérer le profil /me (%s), redirection vers la saisie manuelle",
+                            err,
+                        )
+                        return await self.async_step_manual_home()
+
                     if not me or not isinstance(me, dict):
                         raise TadoError("Serveurs Tado temporairement indisponibles (profil non récupéré).")
                     # Extraction multi-formats du domicile (compatible toutes variantes de l'API Tado)
@@ -166,7 +188,7 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                             home_name = me["name"]
 
                     if not home_id:
-                        return self.async_abort(reason="no_homes_found")
+                        return await self.async_step_manual_home()
 
                 if self._reauth_entry:
                     self.hass.config_entries.async_update_entry(
@@ -219,6 +241,11 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 errors["base"] = "code_expired"
                 self._device_code = None  # Restart flow next time
                 self._tokens = None
+            except TadoRateLimitError as err:
+                _LOGGER.warning("DomoLink-Tado: Quota API Tado dépassé pendant la configuration: %s", err)
+                if self._tokens:
+                    return await self.async_step_manual_home()
+                errors["base"] = "rate_limit"
             except (TadoAuthError, TadoError) as err:
                 _LOGGER.error("DomoLink-Tado: Error during Tado token polling/login: %s", err)
                 if "429" in str(err) or "Rate Limit" in str(err) or "saturé" in str(err):

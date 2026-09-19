@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from dataclasses import dataclass
+import json
 import logging
 import re
 import time
@@ -37,6 +39,14 @@ class TadoError(Exception):
 
 class TadoAuthError(TadoError):
     """Exception raised when authentication fails."""
+
+
+class TadoRateLimitError(TadoError):
+    """Exception raised when Tado API rate limit is exceeded."""
+
+    def __init__(self, message: str, reset_seconds: float | None = None) -> None:
+        super().__init__(message)
+        self.reset_seconds = reset_seconds
 
 
 class TadoDeviceFlowPending(TadoError):
@@ -80,6 +90,7 @@ class TadoClient:
         self.rate_limit_remaining: int | None = None
         self.rate_limit_reset_seconds: int | None = None
         self.rate_limit_last_update: float | None = None
+        self.rate_limited_until: float = 0.0
         self.requests_count: int = 0
 
     @staticmethod
@@ -175,6 +186,62 @@ class TadoClient:
                 raise TadoAuthError(f"Token polling error ({resp.status}): {error_desc}")
         except aiohttp.ClientError as err:
             raise TadoError(f"Erreur de connexion lors du polling: {err}") from err
+
+    @staticmethod
+    def extract_home_id_from_token(token: str) -> tuple[int | None, str | None]:
+        """Extract home_id and home_name directly from JWT token payload without making API calls."""
+        if not token or not isinstance(token, str):
+            return None, None
+        parts = token.split(".")
+        if len(parts) < 2:
+            return None, None
+        payload_b64 = parts[1]
+        rem = len(payload_b64) % 4
+        if rem > 0:
+            payload_b64 += "=" * (4 - rem)
+        try:
+            decoded_bytes = base64.urlsafe_b64decode(payload_b64)
+            payload = json.loads(decoded_bytes.decode("utf-8"))
+        except Exception:
+            return None, None
+
+        if not isinstance(payload, dict):
+            return None, None
+
+        home_id: int | None = None
+        home_name: str | None = None
+
+        for claim in ("tado_homes", "homes"):
+            homes = payload.get(claim)
+            if isinstance(homes, list) and len(homes) > 0:
+                first = homes[0]
+                if isinstance(first, dict):
+                    raw_id = first.get("id") or first.get("homeId")
+                    if raw_id:
+                        try:
+                            home_id = int(raw_id)
+                            home_name = first.get("name")
+                            break
+                        except (ValueError, TypeError):
+                            pass
+                elif isinstance(first, (int, str)):
+                    try:
+                        home_id = int(first)
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+        if home_id is None:
+            for claim in ("homeId", "home_id", "currentHomeId", "current_home_id"):
+                raw_id = payload.get(claim)
+                if raw_id is not None:
+                    try:
+                        home_id = int(raw_id)
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+        return home_id, home_name
 
     async def async_get_valid_token(self) -> str:
         """Ensure the current access token is valid, refreshing if needed."""
@@ -296,6 +363,18 @@ class TadoClient:
                 except (ValueError, TypeError):
                     pass
 
+        if self.rate_limit_reset_seconds is None:
+            retry_after = headers.get("Retry-After") or headers.get("retry-after")
+            if retry_after:
+                try:
+                    ra_val = float(retry_after)
+                    if ra_val > 1000000000:
+                        self.rate_limit_reset_seconds = int(max(1, ra_val - time.time()))
+                    else:
+                        self.rate_limit_reset_seconds = int(ra_val)
+                except (ValueError, TypeError):
+                    pass
+
         if self.rate_limit_remaining is not None or self.rate_limit_limit is not None:
             self.rate_limit_last_update = time.time()
 
@@ -310,17 +389,31 @@ class TadoClient:
         elif self.requests_count > 0:
             used = self.requests_count
 
+        now = time.time()
+        is_blocked = now < self.rate_limited_until
+        remaining_cooldown = max(0.0, self.rate_limited_until - now) if is_blocked else 0.0
+
         return {
             "limit": limit,
             "remaining": rem,
             "used": used,
             "requests_count": self.requests_count,
-            "reset_seconds": self.rate_limit_reset_seconds,
+            "reset_seconds": int(remaining_cooldown) if is_blocked else self.rate_limit_reset_seconds,
+            "circuit_breaker_active": is_blocked,
+            "cooldown_remaining_seconds": round(remaining_cooldown, 1),
             "last_update": self.rate_limit_last_update,
         }
 
     async def async_refresh_token(self) -> str:
         """Refresh the access token using the stored refresh token."""
+        now = time.time()
+        if now < self.rate_limited_until:
+            remaining_cooldown = self.rate_limited_until - now
+            raise TadoRateLimitError(
+                f"Rafraîchissement du jeton bloqué localement : quota Tado épuisé (réessai dans {remaining_cooldown:.0f}s)",
+                reset_seconds=remaining_cooldown,
+            )
+
         if not self.refresh_token:
             raise TadoAuthError("No refresh token available")
 
@@ -342,7 +435,23 @@ class TadoClient:
                 self.requests_count += 1
                 async with self.session.post(TADO_TOKEN_URL, data=data, headers=headers) as resp:
                     if resp.status == 429:
-                        _rate_limit_wait = self._calculate_rate_limit_delay(resp, attempt, default_base=3.0, max_delay=30.0)
+                        self._parse_ratelimit_headers(resp.headers)
+                        reset_sec = self.rate_limit_reset_seconds
+                        rem = self.rate_limit_remaining
+                        if rem == 0 or (reset_sec is not None and reset_sec > 60):
+                            cooldown = float(reset_sec) if reset_sec and reset_sec > 0 else 3600.0
+                            self.rate_limited_until = time.time() + cooldown
+                            _LOGGER.error(
+                                "Quota Tado API épuisé lors du rafraîchissement (remaining=%s, reset_in=%.0fs). Disjoncteur activé.",
+                                rem,
+                                cooldown,
+                            )
+                            raise TadoRateLimitError(
+                                f"Quota Tado API épuisé lors du rafraîchissement ({rem} requêtes restantes). Prochaine réinitialisation dans {cooldown:.0f}s.",
+                                reset_seconds=cooldown,
+                            )
+
+                        _rate_limit_wait = self._calculate_rate_limit_delay(resp, attempt, default_base=3.0, max_delay=10.0)
                         _LOGGER.warning(
                             "Tado token refresh rate limited (429). Retrying in %.1fs (attempt %d/4)...",
                             _rate_limit_wait,
@@ -399,6 +508,14 @@ class TadoClient:
         retry_auth: bool = True,
     ) -> Any:
         """Execute an authenticated request against the Tado API with 429 rate limit backoff."""
+        now = time.time()
+        if now < self.rate_limited_until:
+            remaining_cooldown = self.rate_limited_until - now
+            raise TadoRateLimitError(
+                f"Appel API {endpoint} bloqué localement : quota Tado épuisé (réessai dans {remaining_cooldown:.0f}s)",
+                reset_seconds=remaining_cooldown,
+            )
+
         token = await self.async_get_valid_token()
         url = f"{TADO_API_BASE}/{endpoint.lstrip('/')}"
         headers = {
@@ -408,7 +525,7 @@ class TadoClient:
             "User-Agent": DEFAULT_USER_AGENT,
         }
 
-        for attempt in range(5):
+        for attempt in range(3):
             _rate_limit_wait: float | None = None
             try:
                 self.requests_count += 1
@@ -419,15 +536,40 @@ class TadoClient:
                     if resp.status == 429:
                         policy = resp.headers.get("RateLimit-Policy", "")
                         rl = resp.headers.get("RateLimit", "")
-                        _rate_limit_wait = self._calculate_rate_limit_delay(resp, attempt, default_base=2.5, max_delay=30.0)
+                        reset_sec = self.rate_limit_reset_seconds
+                        rem = self.rate_limit_remaining
+
+                        if rem == 0 or (reset_sec is not None and reset_sec > 60):
+                            cooldown = float(reset_sec) if reset_sec and reset_sec > 0 else 3600.0
+                            self.rate_limited_until = time.time() + cooldown
+                            _LOGGER.error(
+                                "Tado API Quota épuisé sur %s (policy=%s, limit=%s, remaining=%s, reset_in=%.0fs). Disjoncteur activé pour %.0fs.",
+                                endpoint,
+                                policy or "N/A",
+                                rl or "N/A",
+                                rem,
+                                cooldown,
+                                cooldown,
+                            )
+                            raise TadoRateLimitError(
+                                f"Quota API Tado épuisé sur {endpoint} ({rem} requêtes restantes). Disjoncteur actif pour {cooldown:.0f}s.",
+                                reset_seconds=cooldown,
+                            )
+
+                        _rate_limit_wait = self._calculate_rate_limit_delay(resp, attempt, default_base=2.0, max_delay=10.0)
                         _LOGGER.warning(
-                            "Tado API Rate Limit (429) sur %s (policy=%s, limit=%s). Attente de %.1fs (tentative %d/5)...",
+                            "Tado API Rate Limit (429) sur %s (policy=%s, limit=%s). Attente de %.1fs (tentative %d/3)...",
                             endpoint,
                             policy or "N/A",
                             rl or "N/A",
                             _rate_limit_wait,
                             attempt + 1,
                         )
+                        if attempt >= 2:
+                            raise TadoRateLimitError(
+                                f"API request to {endpoint} rate limited (429) après 3 tentatives.",
+                                reset_seconds=_rate_limit_wait,
+                            )
                         # Connexion libérée en sortant du async with AVANT le sleep
 
                     elif resp.status == 401 and retry_auth:
@@ -474,12 +616,15 @@ class TadoClient:
                     )
 
             except aiohttp.ClientError as err:
-                if attempt < 4:
+                if attempt < 2:
                     await asyncio.sleep(2.0 * (attempt + 1))
                     continue
                 raise TadoError(f"Network error requesting {endpoint}: {err}") from err
 
-        raise TadoError(f"API request to {endpoint} failed: Serveurs Tado temporairement saturés (Rate Limit 429). Veuillez patienter.")
+        raise TadoRateLimitError(
+            f"API request to {endpoint} failed: Serveurs Tado temporairement saturés (Rate Limit 429).",
+            reset_seconds=self.rate_limit_reset_seconds or 60.0,
+        )
 
     # ── High-level API endpoints ──────────────────────────────
 

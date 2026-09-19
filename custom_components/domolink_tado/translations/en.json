@@ -5,7 +5,7 @@
         "title": "DomoLink-Tado Connection",
         "description": "Please link your Tado account using the official secure Device Flow protocol.\n\n1. Open the link: [{verification_uri}]({verification_uri})\n2. Enter the following code if prompted: **{user_code}**\n3. Confirm access on your Tado account, then click the blue **Submit** button below.",
         "data": {
-          "home_id": "Home ID (Optional - bypasses Tado rate limiting)"
+          "home_id": "Home ID (Optional - Auto-detected via your Tado account)"
         }
       },
       "manual_home": {
