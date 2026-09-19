@@ -142,14 +142,22 @@ class DomolinkTadoConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if home_id is None and tokens.get("access_token"):
                     jwt_id, jwt_name = TadoClient.extract_home_id_from_token(tokens["access_token"])
                     if jwt_id:
-                        _LOGGER.info(
-                            "DomoLink-Tado: Home ID %s (%s) extrait automatiquement du jeton OAuth JWT (0 requête API consommée)!",
-                            jwt_id,
-                            jwt_name or "Tado Home",
-                        )
                         home_id = jwt_id
                         if jwt_name:
                             home_name = jwt_name
+                        else:
+                            try:
+                                h_info = await asyncio.wait_for(client.get_home_info(jwt_id), timeout=3.0)
+                                if h_info and isinstance(h_info, dict) and h_info.get("name"):
+                                    home_name = h_info["name"]
+                            except Exception:
+                                pass
+                        _LOGGER.info(
+                            "DomoLink-Tado: Home ID %s (%s) extrait automatiquement !",
+                            jwt_id,
+                            home_name,
+                        )
+
 
                 # 3. Récupération via /me uniquement si non trouvé dans le jeton ni fourni manuellement
                 if home_id is None:

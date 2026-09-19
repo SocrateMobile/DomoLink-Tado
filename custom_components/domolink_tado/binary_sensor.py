@@ -25,29 +25,41 @@ async def async_setup_entry(
     """Set up DomoLink-Tado binary sensors from config entry."""
     coordinator: DomolinkTadoCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
-    entities: list[BinarySensorEntity] = []
-
     # 1. Global Home Binary Sensors
-    entities.append(DomolinkTadoPresenceBinarySensor(coordinator))
+    async_add_entities([DomolinkTadoPresenceBinarySensor(coordinator)])
 
-    # 2. Zone Binary Sensors
-    zones = coordinator.data.get("zones", {})
-    for zone_id in zones:
-        entities.append(DomolinkTadoOpenWindowBinarySensor(coordinator, zone_id))
-        entities.append(DomolinkTadoHeatingActiveBinarySensor(coordinator, zone_id))
-        entities.append(DomolinkTadoOverlayActiveBinarySensor(coordinator, zone_id))
-        entities.append(DomolinkTadoZoneMoldRiskProblemBinarySensor(coordinator, zone_id))
-        entities.append(DomolinkTadoZoneVentilationRecommendedBinarySensor(coordinator, zone_id))
-        entities.append(DomolinkTadoZonePreheatNowBinarySensor(coordinator, zone_id))
-        entities.append(DomolinkTadoZoneRapidWindowDropBinarySensor(coordinator, zone_id))
+    # 2. Zone & Device Binary Sensors (Découverte dynamique)
+    added_zone_binary_sensors: set[int] = set()
+    added_device_binary_sensors: set[str] = set()
 
-    # 3. Device Binary Sensors (Battery alert & Connection)
-    devices = coordinator.data.get("devices", {})
-    for serial in devices:
-        entities.append(DomolinkTadoDeviceBatteryAlertBinarySensor(coordinator, serial))
-        entities.append(DomolinkTadoDeviceConnectionBinarySensor(coordinator, serial))
+    def _check_and_add_dynamic_binary_sensors() -> None:
+        new_binary_sensors: list[BinarySensorEntity] = []
+        zones = (coordinator.data or {}).get("zones", {})
+        for zone_id in zones:
+            if zone_id not in added_zone_binary_sensors:
+                new_binary_sensors.append(DomolinkTadoOpenWindowBinarySensor(coordinator, zone_id))
+                new_binary_sensors.append(DomolinkTadoHeatingActiveBinarySensor(coordinator, zone_id))
+                new_binary_sensors.append(DomolinkTadoOverlayActiveBinarySensor(coordinator, zone_id))
+                new_binary_sensors.append(DomolinkTadoZoneMoldRiskProblemBinarySensor(coordinator, zone_id))
+                new_binary_sensors.append(DomolinkTadoZoneVentilationRecommendedBinarySensor(coordinator, zone_id))
+                new_binary_sensors.append(DomolinkTadoZonePreheatNowBinarySensor(coordinator, zone_id))
+                new_binary_sensors.append(DomolinkTadoZoneRapidWindowDropBinarySensor(coordinator, zone_id))
+                added_zone_binary_sensors.add(zone_id)
 
-    async_add_entities(entities)
+        devices = (coordinator.data or {}).get("devices", {})
+        for serial in devices:
+            if serial not in added_device_binary_sensors:
+                new_binary_sensors.append(DomolinkTadoDeviceConnectionBinarySensor(coordinator, serial))
+                dev = devices.get(serial, {})
+                if "batteryState" in dev:
+                    new_binary_sensors.append(DomolinkTadoDeviceBatteryAlertBinarySensor(coordinator, serial))
+                added_device_binary_sensors.add(serial)
+
+        if new_binary_sensors:
+            async_add_entities(new_binary_sensors)
+
+    _check_and_add_dynamic_binary_sensors()
+    entry.async_on_unload(coordinator.async_add_listener(_check_and_add_dynamic_binary_sensors))
 
 
 # ── Global Presence ─────────────────────────────────────────
@@ -66,7 +78,7 @@ class DomolinkTadoPresenceBinarySensor(CoordinatorEntity[DomolinkTadoCoordinator
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
-            name=f"Tado {self.coordinator.home_name}",
+            name=self.coordinator.formatted_home_name,
             manufacturer="Tado (DomoLink)",
             model="Home Hub",
         )

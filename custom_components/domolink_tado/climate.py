@@ -41,15 +41,21 @@ async def async_setup_entry(
 ) -> None:
     """Set up DomoLink-Tado climate entities from a config entry."""
     coordinator: DomolinkTadoCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    added_zones: set[int] = set()
 
-    entities: list[DomolinkTadoClimate] = []
-    zones = (coordinator.data or {}).get("zones", {})
+    def _check_and_add_zones() -> None:
+        new_entities: list[DomolinkTadoClimate] = []
+        zones = (coordinator.data or {}).get("zones", {})
+        for zone_id, zone_data in zones.items():
+            if zone_id not in added_zones and zone_data.get("type") in ("HEATING", "AIR_CONDITIONING"):
+                new_entities.append(DomolinkTadoClimate(coordinator, entry, zone_id))
+                added_zones.add(zone_id)
+        if new_entities:
+            _LOGGER.info("DomoLink-Tado: Ajout de %d thermostat(s) / climatiseur(s).", len(new_entities))
+            async_add_entities(new_entities)
 
-    for zone_id, zone_data in zones.items():
-        if zone_data.get("type") in ("HEATING", "AIR_CONDITIONING"):
-            entities.append(DomolinkTadoClimate(coordinator, entry, zone_id))
-
-    async_add_entities(entities)
+    _check_and_add_zones()
+    entry.async_on_unload(coordinator.async_add_listener(_check_and_add_zones))
 
 
 class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEntity):

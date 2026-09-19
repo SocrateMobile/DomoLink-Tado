@@ -22,19 +22,30 @@ async def async_setup_entry(
     """Set up DomoLink-Tado buttons from config entry."""
     coordinator: DomolinkTadoCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
-    entities: list[ButtonEntity] = [
+    # 1. Global Buttons
+    async_add_entities([
         DomolinkTadoResumeAllSchedulesButton(coordinator),
         DomolinkTadoAllOffButton(coordinator),
         DomolinkTadoSmartBoostButton(coordinator),
-    ]
+    ])
 
-    # Boutons individuels par zone de chauffage
-    zones = coordinator.data.get("zones", {})
-    for zone_id in zones:
-        entities.append(DomolinkTadoZoneResumeScheduleButton(coordinator, zone_id))
-        entities.append(DomolinkTadoZoneBoostButton(coordinator, zone_id))
+    # 2. Dynamic Zone Buttons
+    added_zone_buttons: set[int] = set()
 
-    async_add_entities(entities)
+    def _check_and_add_zone_buttons() -> None:
+        new_buttons: list[ButtonEntity] = []
+        zones = (coordinator.data or {}).get("zones", {})
+        for zone_id in zones:
+            if zone_id not in added_zone_buttons:
+                new_buttons.append(DomolinkTadoZoneResumeScheduleButton(coordinator, zone_id))
+                new_buttons.append(DomolinkTadoZoneBoostButton(coordinator, zone_id))
+                added_zone_buttons.add(zone_id)
+
+        if new_buttons:
+            async_add_entities(new_buttons)
+
+    _check_and_add_zone_buttons()
+    entry.async_on_unload(coordinator.async_add_listener(_check_and_add_zone_buttons))
 
 
 class DomolinkTadoResumeAllSchedulesButton(CoordinatorEntity[DomolinkTadoCoordinator], ButtonEntity):
@@ -51,7 +62,7 @@ class DomolinkTadoResumeAllSchedulesButton(CoordinatorEntity[DomolinkTadoCoordin
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
-            name=f"Tado {self.coordinator.home_name}",
+            name=self.coordinator.formatted_home_name,
             manufacturer="Tado (DomoLink)",
             model="Home Hub",
         )
@@ -75,7 +86,7 @@ class DomolinkTadoAllOffButton(CoordinatorEntity[DomolinkTadoCoordinator], Butto
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
-            name=f"Tado {self.coordinator.home_name}",
+            name=self.coordinator.formatted_home_name,
             manufacturer="Tado (DomoLink)",
             model="Home Hub",
         )
@@ -99,7 +110,7 @@ class DomolinkTadoSmartBoostButton(CoordinatorEntity[DomolinkTadoCoordinator], B
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
-            name=f"Tado {self.coordinator.home_name}",
+            name=self.coordinator.formatted_home_name,
             manufacturer="Tado (DomoLink)",
             model="Home Hub",
         )
