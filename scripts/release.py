@@ -43,6 +43,23 @@ def get_token() -> str:
     except Exception:
         pass
 
+    # Check git credential helper (e.g. osxkeychain)
+    try:
+        cred_out = subprocess.check_output(
+            ["git", "credential", "fill"],
+            input="protocol=https\nhost=github.com\n",
+            cwd=ROOT_DIR,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        for line in cred_out.splitlines():
+            if line.startswith("password="):
+                pwd = line.split("=", 1)[1].strip()
+                if pwd.startswith("ghp_") or pwd.startswith("github_pat_"):
+                    return pwd
+    except Exception:
+        pass
+
     print("Error: GITHUB_TOKEN environment variable is not set.")
     print("Please set your GitHub Personal Access Token via:")
     print("    export GITHUB_TOKEN=\"your_token\"")
