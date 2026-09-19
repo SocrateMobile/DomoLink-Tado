@@ -32,40 +32,53 @@ async def async_setup_entry(
     """Set up DomoLink-Tado sensors from config entry."""
     coordinator: DomolinkTadoCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
-    entities: list[SensorEntity] = []
-
     # 1. Global Home Sensors
-    entities.append(DomolinkTadoOutdoorTempSensor(coordinator))
-    entities.append(DomolinkTadoOutdoorHumiditySensor(coordinator))
-    entities.append(DomolinkTadoActiveHeatingZonesSensor(coordinator))
-    entities.append(DomolinkTadoTotalHeatingPowerSensor(coordinator))
+    global_entities: list[SensorEntity] = [
+        DomolinkTadoOutdoorTempSensor(coordinator),
+        DomolinkTadoOutdoorHumiditySensor(coordinator),
+        DomolinkTadoActiveHeatingZonesSensor(coordinator),
+        DomolinkTadoTotalHeatingPowerSensor(coordinator),
+    ]
 
     # Capteurs de Quota API Tado (RFC RateLimit)
     if entry.options.get(CONF_SHOW_QUOTA_SENSORS, DEFAULT_SHOW_QUOTA_SENSORS):
-        entities.append(DomolinkTadoQuotaRemainingSensor(coordinator))
-        entities.append(DomolinkTadoQuotaLimitSensor(coordinator))
-        entities.append(DomolinkTadoQuotaUsedSensor(coordinator))
+        global_entities.append(DomolinkTadoQuotaRemainingSensor(coordinator))
+        global_entities.append(DomolinkTadoQuotaLimitSensor(coordinator))
+        global_entities.append(DomolinkTadoQuotaUsedSensor(coordinator))
 
-    # 2. Zone Sensors
-    zones = coordinator.data.get("zones", {})
-    for zone_id, zone_data in zones.items():
-        entities.append(DomolinkTadoZoneTempSensor(coordinator, zone_id))
-        entities.append(DomolinkTadoZoneTargetTempSensor(coordinator, zone_id))
-        entities.append(DomolinkTadoZoneHumiditySensor(coordinator, zone_id))
-        entities.append(DomolinkTadoZoneHeatingPowerSensor(coordinator, zone_id))
-        entities.append(DomolinkTadoZoneDewPointSensor(coordinator, zone_id))
-        entities.append(DomolinkTadoZoneAbsoluteHumiditySensor(coordinator, zone_id))
-        entities.append(DomolinkTadoZoneMoldRiskSensor(coordinator, zone_id))
-        entities.append(DomolinkTadoZonePreheatAdvisorSensor(coordinator, zone_id))
-        entities.append(DomolinkTadoZoneHeatingRateSensor(coordinator, zone_id))
+    async_add_entities(global_entities)
 
-    # 3. Device Battery Sensors (Valves & Thermostats)
-    devices = coordinator.data.get("devices", {})
-    for serial, dev in devices.items():
-        if "batteryState" in dev:
-            entities.append(DomolinkTadoDeviceBatterySensor(coordinator, serial))
+    # 2. Zone & Device Sensors (Découverte dynamique)
+    added_zone_sensors: set[int] = set()
+    added_device_sensors: set[str] = set()
 
-    async_add_entities(entities)
+    def _check_and_add_dynamic_sensors() -> None:
+        new_sensors: list[SensorEntity] = []
+        zones = (coordinator.data or {}).get("zones", {})
+        for zone_id, zone_data in zones.items():
+            if zone_id not in added_zone_sensors:
+                new_sensors.append(DomolinkTadoZoneTempSensor(coordinator, zone_id))
+                new_sensors.append(DomolinkTadoZoneTargetTempSensor(coordinator, zone_id))
+                new_sensors.append(DomolinkTadoZoneHumiditySensor(coordinator, zone_id))
+                new_sensors.append(DomolinkTadoZoneHeatingPowerSensor(coordinator, zone_id))
+                new_sensors.append(DomolinkTadoZoneDewPointSensor(coordinator, zone_id))
+                new_sensors.append(DomolinkTadoZoneAbsoluteHumiditySensor(coordinator, zone_id))
+                new_sensors.append(DomolinkTadoZoneMoldRiskSensor(coordinator, zone_id))
+                new_sensors.append(DomolinkTadoZonePreheatAdvisorSensor(coordinator, zone_id))
+                new_sensors.append(DomolinkTadoZoneHeatingRateSensor(coordinator, zone_id))
+                added_zone_sensors.add(zone_id)
+
+        devices = (coordinator.data or {}).get("devices", {})
+        for serial, dev in devices.items():
+            if serial not in added_device_sensors and "batteryState" in dev:
+                new_sensors.append(DomolinkTadoDeviceBatterySensor(coordinator, serial))
+                added_device_sensors.add(serial)
+
+        if new_sensors:
+            async_add_entities(new_sensors)
+
+    _check_and_add_dynamic_sensors()
+    entry.async_on_unload(coordinator.async_add_listener(_check_and_add_dynamic_sensors))
 
 
 # ── Global Sensors ──────────────────────────────────────────
@@ -86,7 +99,7 @@ class DomolinkTadoOutdoorTempSensor(CoordinatorEntity[DomolinkTadoCoordinator], 
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
-            name=f"Tado {self.coordinator.home_name}",
+            name=self.coordinator.formatted_home_name,
             manufacturer="Tado (DomoLink)",
             model="Home Hub",
         )
@@ -112,7 +125,7 @@ class DomolinkTadoOutdoorHumiditySensor(CoordinatorEntity[DomolinkTadoCoordinato
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
-            name=f"Tado {self.coordinator.home_name}",
+            name=self.coordinator.formatted_home_name,
             manufacturer="Tado (DomoLink)",
             model="Home Hub",
         )
@@ -137,7 +150,7 @@ class DomolinkTadoActiveHeatingZonesSensor(CoordinatorEntity[DomolinkTadoCoordin
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
-            name=f"Tado {self.coordinator.home_name}",
+            name=self.coordinator.formatted_home_name,
             manufacturer="Tado (DomoLink)",
             model="Home Hub",
         )
@@ -163,7 +176,7 @@ class DomolinkTadoTotalHeatingPowerSensor(CoordinatorEntity[DomolinkTadoCoordina
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
-            name=f"Tado {self.coordinator.home_name}",
+            name=self.coordinator.formatted_home_name,
             manufacturer="Tado (DomoLink)",
             model="Home Hub",
         )
@@ -193,7 +206,7 @@ class DomolinkTadoQuotaRemainingSensor(CoordinatorEntity[DomolinkTadoCoordinator
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
-            name=f"Tado {self.coordinator.home_name}",
+            name=self.coordinator.formatted_home_name,
             manufacturer="Tado (DomoLink)",
             model="Home Hub",
         )
@@ -230,7 +243,7 @@ class DomolinkTadoQuotaLimitSensor(CoordinatorEntity[DomolinkTadoCoordinator], S
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
-            name=f"Tado {self.coordinator.home_name}",
+            name=self.coordinator.formatted_home_name,
             manufacturer="Tado (DomoLink)",
             model="Home Hub",
         )
@@ -256,7 +269,7 @@ class DomolinkTadoQuotaUsedSensor(CoordinatorEntity[DomolinkTadoCoordinator], Se
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
-            name=f"Tado {self.coordinator.home_name}",
+            name=self.coordinator.formatted_home_name,
             manufacturer="Tado (DomoLink)",
             model="Home Hub",
         )

@@ -176,8 +176,17 @@ if "homeassistant" not in sys.modules:
             self.name = name
             self.update_interval = update_interval
             self.data = {}
+            self._listeners = {}
+        def async_add_listener(self, update_callback, context=None):
+            idx = len(self._listeners)
+            self._listeners[idx] = update_callback
+            return lambda: self._listeners.pop(idx, None)
+        def async_update_listeners(self):
+            for listener in list(self._listeners.values()):
+                listener()
         def async_set_updated_data(self, data):
             self.data = data
+            self.async_update_listeners()
         def __class_getitem__(cls, item):
             return cls
 
@@ -2207,5 +2216,106 @@ class TestV1515RateLimitAndJWTHomeDiscovery(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(coordinator._consecutive_failures, 0)
         # Network call was skipped
         session.request.assert_not_called()
+
+    async def test_coordinator_raises_update_failed_when_no_data_and_circuit_breaker_active(self):
+        """Test coordinator raises UpdateFailed on initial fetch when circuit breaker is active without data."""
+        import time
+        from custom_components.domolink_tado.coordinator import DomolinkTadoCoordinator
+        from custom_components.domolink_tado.tado_api import TadoClient
+        from homeassistant.helpers.update_coordinator import UpdateFailed
+
+        session = MagicMock()
+        client = TadoClient(session, access_token="tok")
+        client.rate_limited_until = time.time() + 500
+
+        entry = MagicMock()
+        entry.options = {}
+        coordinator = DomolinkTadoCoordinator(
+            hass=MagicMock(),
+            entry=entry,
+            client=client,
+            home_id=123,
+            home_name="Tado Home",
+        )
+        coordinator.data = None
+
+        with self.assertRaises(UpdateFailed):
+            await coordinator._async_update_data()
+
+    def test_coordinator_formatted_home_name(self):
+        """Test formatted_home_name handles Tado prefix properly."""
+        from custom_components.domolink_tado.coordinator import DomolinkTadoCoordinator
+
+        coord1 = DomolinkTadoCoordinator(MagicMock(), MagicMock(), MagicMock(), 123, "Tado Home")
+        self.assertEqual(coord1.formatted_home_name, "Tado Home")
+
+        coord2 = DomolinkTadoCoordinator(MagicMock(), MagicMock(), MagicMock(), 123, "Maison Lavigne")
+        self.assertEqual(coord2.formatted_home_name, "Tado Maison Lavigne")
+
+    async def test_dynamic_discovery_platforms(self):
+        """Test dynamic discovery adds entities when coordinator data is updated."""
+        from custom_components.domolink_tado.coordinator import DomolinkTadoCoordinator
+        from custom_components.domolink_tado.climate import async_setup_entry as climate_setup
+        from custom_components.domolink_tado.sensor import async_setup_entry as sensor_setup
+        from custom_components.domolink_tado.switch import async_setup_entry as switch_setup
+        from custom_components.domolink_tado.button import async_setup_entry as button_setup
+        from custom_components.domolink_tado.binary_sensor import async_setup_entry as binary_sensor_setup
+        from custom_components.domolink_tado.water_heater import async_setup_entry as water_heater_setup
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.options = {}
+
+        client = MagicMock()
+        coordinator = DomolinkTadoCoordinator(hass, entry, client, 123, "Maison")
+        # Start with empty data (as happens if first fetch was throttled)
+        coordinator.data = {"zones": {}, "devices": {}}
+
+        hass.data = {"domolink_tado": {"test_entry": {"coordinator": coordinator}}}
+
+        added_climates = []
+        added_sensors = []
+        added_switches = []
+        added_buttons = []
+        added_binary_sensors = []
+        added_water_heaters = []
+
+        await climate_setup(hass, entry, lambda ents: added_climates.extend(ents))
+        await sensor_setup(hass, entry, lambda ents: added_sensors.extend(ents))
+        await switch_setup(hass, entry, lambda ents: added_switches.extend(ents))
+        await button_setup(hass, entry, lambda ents: added_buttons.extend(ents))
+        await binary_sensor_setup(hass, entry, lambda ents: added_binary_sensors.extend(ents))
+        await water_heater_setup(hass, entry, lambda ents: added_water_heaters.extend(ents))
+
+        # Initially, only global sensors/switches/buttons were added, 0 climates, 0 water heaters
+        self.assertEqual(len(added_climates), 0)
+        self.assertEqual(len(added_water_heaters), 0)
+
+        # Now simulate coordinator receiving zones and devices
+        coordinator.data = {
+            "zones": {
+                1: {"id": 1, "name": "Salon", "type": "HEATING", "devices": [{"serialNo": "VA123"}]},
+                2: {"id": 2, "name": "Eau Chaude", "type": "HOT_WATER", "devices": []},
+            },
+            "devices": {
+                "VA123": {"serialNo": "VA123", "deviceType": "VA02", "childLockEnabled": True, "batteryState": "NORMAL"},
+            },
+            "weather": {},
+            "presence": "HOME",
+        }
+
+        # Fire registered listeners
+        for listener in list(coordinator._listeners.values()):
+            listener()
+
+        # Check that dynamic entities were discovered and added
+        self.assertTrue(len(added_climates) >= 1)
+        self.assertTrue(len(added_water_heaters) >= 1)
+        self.assertTrue(any(e._attr_unique_id == "domolink_tado_123_zone_1" for e in added_climates))
+        self.assertTrue(any("VA123" in e._attr_unique_id for e in added_sensors))
+        self.assertTrue(any("VA123" in e._attr_unique_id for e in added_switches))
+
+
 
 

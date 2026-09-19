@@ -41,14 +41,23 @@ async def async_setup_entry(
     """Set up DomoLink-Tado water heater entities from config entry."""
     coordinator: DomolinkTadoCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
-    entities: list[DomolinkTadoWaterHeater] = []
-    zones = (coordinator.data or {}).get("zones", {})
+    added_water_heaters: set[int] = set()
 
-    for zone_id, zone_data in zones.items():
-        if zone_data.get("type") in ("HOT_WATER", "DOMESTIC_HOT_WATER"):
-            entities.append(DomolinkTadoWaterHeater(coordinator, zone_id))
+    def _check_and_add_water_heaters() -> None:
+        new_water_heaters: list[DomolinkTadoWaterHeater] = []
+        zones = (coordinator.data or {}).get("zones", {})
 
-    async_add_entities(entities)
+        for zone_id, zone_data in zones.items():
+            if zone_id not in added_water_heaters and zone_data.get("type") in ("HOT_WATER", "DOMESTIC_HOT_WATER"):
+                new_water_heaters.append(DomolinkTadoWaterHeater(coordinator, zone_id))
+                added_water_heaters.add(zone_id)
+
+        if new_water_heaters:
+            async_add_entities(new_water_heaters)
+
+    _check_and_add_water_heaters()
+    entry.async_on_unload(coordinator.async_add_listener(_check_and_add_water_heaters))
+
 
 
 class DomolinkTadoWaterHeater(CoordinatorEntity[DomolinkTadoCoordinator], WaterHeaterEntity):

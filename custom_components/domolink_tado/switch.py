@@ -22,26 +22,39 @@ async def async_setup_entry(
     """Set up DomoLink-Tado switches from config entry."""
     coordinator: DomolinkTadoCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
-    entities: list[SwitchEntity] = []
+    # 1. Global Home Presence and Eco switches
+    async_add_entities([
+        DomolinkTadoPresenceSwitch(coordinator),
+        DomolinkTadoGlobalEcoSwitch(coordinator),
+    ])
 
-    # 1. Child Lock switches for each physical radiator valve
-    devices = coordinator.data.get("devices", {})
-    for serial, dev in devices.items():
-        if "childLockEnabled" in dev:
-            entities.append(DomolinkTadoChildLockSwitch(coordinator, serial))
+    # 2. Dynamic Zone & Device Switches (Child Lock & Zone Overlay)
+    added_child_locks: set[str] = set()
+    added_zone_overlays: set[int] = set()
 
-    # 2. Zone Overlay switches (active vs schedule)
-    zones = coordinator.data.get("zones", {})
-    for zone_id in zones:
-        entities.append(DomolinkTadoZoneOverlaySwitch(coordinator, zone_id))
+    def _check_and_add_dynamic_switches() -> None:
+        new_switches: list[SwitchEntity] = []
 
-    # 3. Global Home Presence switch (On = Home, Off = Away)
-    entities.append(DomolinkTadoPresenceSwitch(coordinator))
+        # 1. Child Lock switches for each physical radiator valve
+        devices = (coordinator.data or {}).get("devices", {})
+        for serial, dev in devices.items():
+            if serial not in added_child_locks and "childLockEnabled" in dev:
+                new_switches.append(DomolinkTadoChildLockSwitch(coordinator, serial))
+                added_child_locks.add(serial)
 
-    # 4. Global Eco switch (On = Mode Éco partout, Off = Reprendre programmations)
-    entities.append(DomolinkTadoGlobalEcoSwitch(coordinator))
+        # 2. Zone Overlay switches (active vs schedule)
+        zones = (coordinator.data or {}).get("zones", {})
+        for zone_id in zones:
+            if zone_id not in added_zone_overlays:
+                new_switches.append(DomolinkTadoZoneOverlaySwitch(coordinator, zone_id))
+                added_zone_overlays.add(zone_id)
 
-    async_add_entities(entities)
+        if new_switches:
+            async_add_entities(new_switches)
+
+    _check_and_add_dynamic_switches()
+    entry.async_on_unload(coordinator.async_add_listener(_check_and_add_dynamic_switches))
+
 
 
 class DomolinkTadoChildLockSwitch(CoordinatorEntity[DomolinkTadoCoordinator], SwitchEntity):
@@ -134,7 +147,7 @@ class DomolinkTadoPresenceSwitch(CoordinatorEntity[DomolinkTadoCoordinator], Swi
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
-            name=f"Tado {self.coordinator.home_name}",
+            name=self.coordinator.formatted_home_name,
             manufacturer="Tado (DomoLink)",
             model="Home Hub",
         )
@@ -166,7 +179,7 @@ class DomolinkTadoGlobalEcoSwitch(CoordinatorEntity[DomolinkTadoCoordinator], Sw
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
-            name=f"Tado {self.coordinator.home_name}",
+            name=self.coordinator.formatted_home_name,
             manufacturer="Tado (DomoLink)",
             model="Home Hub",
         )

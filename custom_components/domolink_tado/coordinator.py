@@ -119,6 +119,14 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_offset_update_time: dict[str, float] = {}
         self._consecutive_failures: int = 0
 
+    @property
+    def formatted_home_name(self) -> str:
+        """Return formatted home name avoiding duplicate prefixes."""
+        name = (self.home_name or "Maison").strip()
+        if name.lower().startswith("tado"):
+            return name
+        return f"Tado {name}"
+
     def _create_safe_task(self, coro: Coroutine[Any, Any, Any], task_name: str = "tado_task") -> asyncio.Task[Any]:
         """Create a background task with error logging to avoid unretrieved exceptions."""
         async def _wrapper() -> None:
@@ -190,21 +198,11 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     remaining_cooldown,
                 )
                 self.update_interval = timedelta(seconds=min(max(int(remaining_cooldown) + 5, 60), 900))
-                if self.data:
+                if self.data and self.data.get("zones"):
                     return self.data
-                return {
-                    "home_id": self.home_id,
-                    "home_name": self.home_name,
-                    "zones": {},
-                    "devices": {},
-                    "weather": {},
-                    "home_state": {},
-                    "presence": "HOME",
-                    "active_heating_zones": 0,
-                    "total_heating_power": 0.0,
-                    "rate_limit": self.client.rate_limit_info if hasattr(self.client, "rate_limit_info") else {},
-                    "last_update": datetime.now().isoformat(),
-                }
+                raise UpdateFailed(
+                    f"Quota Tado temporairement indisponible (disjoncteur actif pour encore {int(remaining_cooldown)}s). En attente de renouvellement du quota."
+                )
 
             # Mode Eco-quota : si le quota restant est critique (< 20 requêtes), économiser les requêtes secondaires
             rate_limit_rem = getattr(self.client, "rate_limit_remaining", None)
@@ -226,10 +224,20 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     self._zones_raw = z_res or []
                     self._devices_raw = d_res or []
                     self._last_discovery_time = now
+
+                    # Résolution du nom réel du domicile s'il est générique
+                    if self.home_name in ("Tado Home", "Maison Tado"):
+                        try:
+                            home_info = await self.client.get_home_info(self.home_id)
+                            if home_info and isinstance(home_info, dict) and home_info.get("name"):
+                                self.home_name = home_info["name"]
+                        except Exception:
+                            pass
                 except Exception as err:
                     _LOGGER.warning("DomoLink-Tado: Échec rafraîchissement zones/matériels (%s), utilisation cache", err)
                     if not self._zones_raw or not self._devices_raw:
                         raise
+
 
             # 2. En routine : rafraîchir uniquement les états dynamiques de zones (1 seule requête API !)
             states_res = await self.client.get_zone_states(self.home_id)
@@ -695,21 +703,11 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             cooldown = err.reset_seconds if err.reset_seconds and err.reset_seconds > 0 else 300.0
             self.update_interval = timedelta(seconds=min(max(int(cooldown) + 5, 60), 900))
-            if self.data:
+            if self.data and self.data.get("zones"):
                 return self.data
-            return {
-                "home_id": self.home_id,
-                "home_name": self.home_name,
-                "zones": {},
-                "devices": {},
-                "weather": {},
-                "home_state": {},
-                "presence": "HOME",
-                "active_heating_zones": 0,
-                "total_heating_power": 0.0,
-                "rate_limit": self.client.rate_limit_info if hasattr(self.client, "rate_limit_info") else {},
-                "last_update": datetime.now().isoformat(),
-            }
+            raise UpdateFailed(
+                f"Quota API Tado dépassé lors du premier chargement: {err}. Réessai automatique dans {int(cooldown)}s."
+            ) from err
         except (TadoError, aiohttp.ClientError, TimeoutError, asyncio.TimeoutError) as err:
             self._consecutive_failures += 1
             if self.data and self._consecutive_failures <= 3:
@@ -720,6 +718,8 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 )
                 return self.data
             raise UpdateFailed(f"Erreur de communication Tado ({self._consecutive_failures} échecs consécutifs): {err}") from err
+        except (UpdateFailed, ConfigEntryAuthFailed):
+            raise
         except Exception as err:
             _LOGGER.exception("Erreur inattendue lors de la mise à jour DomoLink-Tado: %s", err)
             raise UpdateFailed(f"Erreur inattendue: {err}") from err
