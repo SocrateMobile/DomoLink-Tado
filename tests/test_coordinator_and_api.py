@@ -2317,5 +2317,88 @@ class TestV1515RateLimitAndJWTHomeDiscovery(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("VA123" in e._attr_unique_id for e in added_switches))
 
 
+class TestV1517QuotaOptimizationAndAttributes(unittest.IsolatedAsyncioTestCase):
+    """Unit tests for v1.5.17: quota optimization, tiered caching, and climate attributes."""
 
+    def test_climate_extra_state_attributes_integration_and_outdoor_temp(self):
+        """Test climate extra_state_attributes exposes integration and outdoor_temperature."""
+        from custom_components.domolink_tado.climate import DomolinkTadoClimate
 
+        coordinator = MagicMock()
+        coordinator.home_id = 123
+        coordinator.formatted_home_name = "Enghien"
+        coordinator.entry.options = {}
+        coordinator.get_zone_labels.return_value = ["Étage"]
+        coordinator.data = {
+            "zones": {
+                1: {
+                    "id": 1,
+                    "name": "Salon",
+                    "type": "HEATING",
+                    "heating_power": 45.0,
+                    "is_overlay_active": False,
+                    "devices": [],
+                }
+            },
+            "weather": {"outdoor_temperature": 18.5},
+            "rate_limit": {"remaining": 656},
+        }
+
+        entry = MagicMock()
+        climate = DomolinkTadoClimate(coordinator, entry, zone_id=1)
+        attrs = climate.extra_state_attributes
+
+        self.assertEqual(attrs.get("integration"), "domolink_tado")
+        self.assertEqual(attrs.get("zone_id"), 1)
+        self.assertEqual(attrs.get("outdoor_temperature"), 18.5)
+        self.assertEqual(attrs.get("heating_power_percentage"), 45.0)
+
+    async def test_adaptive_polling_preserves_quota(self):
+        """Test adaptive polling intervals: 120s during heating, 300s when idle, not 60s for overlay alone."""
+        import time
+        from datetime import timedelta
+        from custom_components.domolink_tado.coordinator import DomolinkTadoCoordinator
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.options = {}
+        client = MagicMock()
+        client.rate_limit_remaining = 800
+        client.get_zones = AsyncMock(return_value=[{"id": 1, "name": "Salon", "type": "HEATING"}])
+        client.get_devices = AsyncMock(return_value=[])
+        client.get_weather = AsyncMock(return_value={})
+        client.get_home_state = AsyncMock(return_value={})
+
+        coord = DomolinkTadoCoordinator(hass, entry, client, home_id=123, home_name="Test")
+        coord._zones_raw = [{"id": 1, "name": "Salon", "type": "HEATING"}]
+        coord._devices_raw = [{"serialNo": "VA123"}]
+        coord._last_discovery_time = time.time()
+        coord._last_weather_time = time.time()
+        coord._last_home_state_time = time.time()
+
+        # Case 1: Active heating -> 120s
+        client.get_zone_states = AsyncMock(return_value={
+            "zoneStates": {"1": {"activityDataPoints": {"heatingPower": {"percentage": 50.0}}}}
+        })
+        await coord._async_update_data()
+        self.assertEqual(coord.update_interval, timedelta(seconds=120))
+
+        # Case 2: Idle (no heating, only overlay active) -> 300s (no longer 60s!)
+        client.get_zone_states = AsyncMock(return_value={
+            "zoneStates": {"1": {
+                "activityDataPoints": {"heatingPower": {"percentage": 0.0}},
+                "overlay": {"type": "MANUAL", "setting": {"power": "ON", "temperature": {"celsius": 19.0}}},
+            }}
+        })
+        await coord._async_update_data()
+        self.assertEqual(coord.update_interval, timedelta(seconds=300))
+
+        # Case 3: Low quota (< 150) -> 600s
+        client.rate_limit_remaining = 120
+        await coord._async_update_data()
+        self.assertEqual(coord.update_interval, timedelta(seconds=600))
+
+        # Case 4: Critical quota (< 50) -> 900s
+        client.rate_limit_remaining = 35
+        await coord._async_update_data()
+        self.assertEqual(coord.update_interval, timedelta(seconds=900))
