@@ -230,9 +230,20 @@ class DomolinkTadoPanel extends HTMLElement {
     if (!this._hass) return { zones: [], allDevices: [], weather: {}, activeCount: 0, labels: [] };
     const states = this._hass.states;
 
-    const climateKeys = Object.keys(states).filter((k) =>
-      k.startsWith("climate.") && (k.includes("domolink_tado") || k.includes("tado"))
-    );
+    const climateKeys = Object.keys(states).filter((k) => {
+      if (!k.startsWith("climate.")) return false;
+      const entity = states[k];
+      const attrs = entity?.attributes || {};
+      if (attrs.integration === "domolink_tado") return true;
+      if (attrs.zone_id !== undefined) return true;
+      if (attrs.is_overlay_active !== undefined) return true;
+      if (attrs.tado_mode !== undefined) return true;
+      if (attrs.rate_limit !== undefined) return true;
+      if (attrs.heating_power_percentage !== undefined) return true;
+      if (k.includes("domolink_tado") || k.includes("tado")) return true;
+      if (attrs.friendly_name && attrs.friendly_name.toLowerCase().includes("tado")) return true;
+      return false;
+    });
 
     const zones = [];
     const allDevices = [];
@@ -310,11 +321,29 @@ class DomolinkTadoPanel extends HTMLElement {
       });
     }
 
-    const outdoorSensor = Object.keys(states).find(
-      (k) => k.includes("domolink_tado") && k.includes("outdoor_temp")
-    );
-    const outdoorVal = outdoorSensor && states[outdoorSensor]?.state;
-    const outdoorTemp = outdoorVal && outdoorVal !== "unavailable" ? `${parseFloat(outdoorVal).toFixed(1)}°` : "--°";
+    let outdoorTemp = "--°";
+    for (const key of climateKeys) {
+      const attrs = states[key]?.attributes;
+      if (attrs?.outdoor_temperature != null && !isNaN(attrs.outdoor_temperature)) {
+        outdoorTemp = `${parseFloat(attrs.outdoor_temperature).toFixed(1)}°`;
+        break;
+      }
+    }
+    if (outdoorTemp === "--°") {
+      const outdoorSensor = Object.keys(states).find(
+        (k) =>
+          k.startsWith("sensor.") &&
+          (k.includes("outdoor_temp") ||
+            k.includes("temperature_exterieure") ||
+            k.includes("tado_outdoor") ||
+            k.includes("outdoor_temperature") ||
+            (k.includes("tado") && (k.includes("exterieure") || k.includes("outdoor") || k.includes("ext"))))
+      );
+      const outdoorVal = outdoorSensor && states[outdoorSensor]?.state;
+      if (outdoorVal && outdoorVal !== "unavailable" && outdoorVal !== "unknown" && !isNaN(outdoorVal)) {
+        outdoorTemp = `${parseFloat(outdoorVal).toFixed(1)}°`;
+      }
+    }
 
     // Extraction télémétrie Quota & Requêtes API Tado
     let rateLimit = null;
@@ -499,11 +528,11 @@ class DomolinkTadoPanel extends HTMLElement {
           box-shadow: 0 2px 10px rgba(2, 132, 199, 0.4);
         }
 
-        /* Bouton Authentification Principal */
+        /* Bouton Statut Connexion / Authentification Principal */
         .header-auth-btn {
-          background: rgba(245, 158, 11, 0.15);
-          border: 1px solid rgba(245, 158, 11, 0.4);
-          color: #f59e0b;
+          background: rgba(34, 197, 94, 0.15);
+          border: 1px solid rgba(34, 197, 94, 0.4);
+          color: #4ade80;
           font-size: 12px;
           font-weight: 800;
           padding: 8px 16px;
@@ -517,10 +546,22 @@ class DomolinkTadoPanel extends HTMLElement {
         }
 
         .header-auth-btn:hover {
+          background: rgba(34, 197, 94, 0.25);
+          color: #86efac;
+          box-shadow: 0 0 14px rgba(34, 197, 94, 0.4);
+          transform: translateY(-1px);
+        }
+
+        .header-auth-btn.auth-warning {
+          background: rgba(245, 158, 11, 0.15);
+          border: 1px solid rgba(245, 158, 11, 0.4);
+          color: #f59e0b;
+        }
+
+        .header-auth-btn.auth-warning:hover {
           background: rgba(245, 158, 11, 0.3);
           color: #fbbf24;
           box-shadow: 0 0 14px rgba(245, 158, 11, 0.4);
-          transform: translateY(-1px);
         }
 
         .header-stats-group {
@@ -1836,10 +1877,10 @@ class DomolinkTadoPanel extends HTMLElement {
             </button>
           </div>
 
-          <!-- Bouton Authentification & Quick Indicators -->
+          <!-- Bouton Statut / Authentification & Quick Indicators -->
           <div class="header-stats-group">
-            <button class="header-auth-btn" id="btnHeaderAuth" title="Lancer une ré-authentification Tado Device Flow">
-              <span>🔑</span> AUTHENTIFICATION
+            <button class="header-auth-btn" id="btnHeaderAuth" title="Connexion active avec les serveurs Tado (cliquez pour gérer l'authentification)">
+              <span>🟢</span> CONNECTÉ
             </button>
             <div class="header-stat-badge" id="apiQuotaBadge" title="Requêtes API Tado : Faites / Restantes pour aujourd'hui (cliquez pour détails)">
               <span style="font-size: 14px;">⚡</span>
@@ -2814,10 +2855,45 @@ class DomolinkTadoPanel extends HTMLElement {
       }
     }
 
+    // 3. Statut de connexion dynamique dans le header
+    const btnAuth = this.querySelector("#btnHeaderAuth");
+    if (btnAuth) {
+      const isConnected = data.zones.length > 0 || (data.rate_limit && data.rate_limit.remaining != null);
+      if (isConnected) {
+        btnAuth.classList.remove("auth-warning");
+        btnAuth.innerHTML = `<span>🟢</span> CONNECTÉ`;
+        btnAuth.title = "Connexion active avec les serveurs Tado (cliquez pour gérer ou ré-authentifier)";
+      } else {
+        btnAuth.classList.add("auth-warning");
+        btnAuth.innerHTML = `<span>🔑</span> AUTHENTIFICATION`;
+        btnAuth.title = "Session Tado à configurer ou reconnecter (cliquez pour lancer l'authentification)";
+      }
+    }
+
     this._renderFilterChips(data.labels);
 
     const grid = this.querySelector("#tado-grid");
     if (!grid) return;
+
+    // Message d'état si aucune pièce n'est détectée
+    let emptyMsg = grid.querySelector("#tado-empty-state");
+    if (data.zones.length === 0) {
+      if (!emptyMsg) {
+        emptyMsg = document.createElement("div");
+        emptyMsg.id = "tado-empty-state";
+        emptyMsg.style.cssText = "grid-column: 1 / -1; text-align: center; padding: 48px 24px; color: #94a3b8;";
+        emptyMsg.innerHTML = `
+          <div style="font-size: 42px; margin-bottom: 12px;">🏠</div>
+          <div style="font-size: 16px; font-weight: 700; color: #f8fafc; margin-bottom: 6px;">Aucune pièce Tado trouvée</div>
+          <div style="font-size: 13px; max-width: 480px; margin: 0 auto; line-height: 1.5;">
+            Home Assistant synchronise les données Tado. Si vos pièces n'apparaissent pas après quelques secondes, vérifiez que l'intégration DomoLink-Tado est bien rechargée.
+          </div>
+        `;
+        grid.appendChild(emptyMsg);
+      }
+    } else if (emptyMsg) {
+      emptyMsg.remove();
+    }
 
     if (!this._cardsMap) {
       this._cardsMap = new Map();

@@ -264,11 +264,13 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
         devs = z.get("devices") or []
         primary_type = (devs[0].get("deviceType") or devs[0].get("type") or "VA01") if devs else "VA01"
         attrs: dict[str, Any] = {
+            "integration": "domolink_tado",
             "zone_id": self.zone_id,
             "zone_type": z.get("type", "HEATING"),
             "min_temp": self.min_temp,
             "max_temp": self.max_temp,
             "is_ac": self.is_ac,
+            "outdoor_temperature": ((self.coordinator.data or {}).get("weather") or {}).get("outdoor_temperature"),
             "heating_power_percentage": float(z.get("heating_power") or 0.0),
             "is_overlay_active": z.get("is_overlay_active", False),
             "open_window_detected": z.get("open_window", False),

@@ -204,17 +204,41 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     f"Quota Tado temporairement indisponible (disjoncteur actif pour encore {int(remaining_cooldown)}s). En attente de renouvellement du quota."
                 )
 
-            # Mode Eco-quota : si le quota restant est critique (< 20 requêtes), économiser les requêtes secondaires
+            # Gestion éco-quota multi-niveaux basée sur le quota restant Tado (plafond 1000 req/jour)
             rate_limit_rem = getattr(self.client, "rate_limit_remaining", None)
-            low_quota = (
-                isinstance(rate_limit_rem, (int, float))
-                and rate_limit_rem < 20
-            )
-            weather_cache_ttl = 3600 if low_quota else 900
-            home_state_cache_ttl = 1800 if low_quota else 300
+            is_valid_rem = isinstance(rate_limit_rem, (int, float))
 
-            # 1. Cache zones et matériel pendant 30 minutes pour éviter le rate limit Tado (429)
-            if not self._zones_raw or not self._devices_raw or (now - self._last_discovery_time > 1800):
+            critical_quota = is_valid_rem and rate_limit_rem < 100
+            moderate_quota = is_valid_rem and rate_limit_rem < 300
+            low_quota = critical_quota
+
+            # TTL Découverte (zones & équipements physiques : quasiment statiques)
+            # 4 heures par défaut (14400s), 8h si modéré, 24h si critique
+            if critical_quota:
+                discovery_cache_ttl = 86400
+            elif moderate_quota:
+                discovery_cache_ttl = 28800
+            else:
+                discovery_cache_ttl = 14400
+
+            # TTL Météo (30 minutes par défaut, 1h si modéré, 2h si critique)
+            if critical_quota:
+                weather_cache_ttl = 7200
+            elif moderate_quota:
+                weather_cache_ttl = 3600
+            else:
+                weather_cache_ttl = 1800
+
+            # TTL Présence Domicile (15 minutes par défaut, 30 min si modéré, 1h si critique)
+            if critical_quota:
+                home_state_cache_ttl = 3600
+            elif moderate_quota:
+                home_state_cache_ttl = 1800
+            else:
+                home_state_cache_ttl = 900
+
+            # 1. Cache zones et matériel pour préserver le quota journalier Tado
+            if not self._zones_raw or not self._devices_raw or (now - self._last_discovery_time > discovery_cache_ttl):
                 try:
                     _LOGGER.debug("DomoLink-Tado: Découverte des zones et équipements...")
                     z_res, d_res = await asyncio.gather(
@@ -649,16 +673,30 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "labels": room_labels,
                 }
 
-            # Polling adaptatif : 600s si low_quota, sinon 60s si chauffe active, 300s (5 min) si tout est au repos
+            # Polling adaptatif intelligent pour respecter le quota journalier Tado (1000 req/jour max)
+            # Important : un overlay actif (consigne manuelle) ne doit PAS forcer un polling à haute fréquence (60s)
+            # car une consigne manuelle peut durer plusieurs heures voire des jours entiers.
             adaptive = self.entry.options.get(CONF_ADAPTIVE_POLLING, True)
-            if low_quota:
-                new_interval = 600
-                if self.update_interval != timedelta(seconds=new_interval):
-                    self.update_interval = timedelta(seconds=new_interval)
+            if is_valid_rem and rate_limit_rem < 50:
+                new_interval = 900  # 15 minutes (urgence critique)
+            elif is_valid_rem and rate_limit_rem < 150:
+                new_interval = 600  # 10 minutes (alerte quota bas)
+            elif is_valid_rem and rate_limit_rem < 300:
+                new_interval = 300  # 5 minutes (préservation quota)
             elif adaptive:
-                new_interval = 60 if (active_heating_count > 0 or any(zd.get("is_overlay_active") for zd in zones_data.values())) else 300
-                if self.update_interval != timedelta(seconds=new_interval):
-                    self.update_interval = timedelta(seconds=new_interval)
+                # Chauffe active : 120s (2 min) réactif et respectueux du quota. Repos : 300s (5 min).
+                new_interval = 120 if active_heating_count > 0 else 300
+            else:
+                new_interval = 300
+
+            if self.update_interval != timedelta(seconds=new_interval):
+                _LOGGER.debug(
+                    "DomoLink-Tado: Ajustement intervalle de polling à %ds (chauffe=%d, quota_restant=%s)",
+                    new_interval,
+                    active_heating_count,
+                    rate_limit_rem,
+                )
+                self.update_interval = timedelta(seconds=new_interval)
 
             weather_state = (
                 weather.get("weatherState", {}).get("value")
