@@ -1,11 +1,17 @@
-"""Constants for the DomoLink-Tado integration."""
-from __future__ import annotations
-
+import json
+import os
 from homeassistant.const import Platform
 
 DOMAIN = "domolink_tado"
 NAME = "DomoLink-Tado"
-VERSION = "1.5.17"
+
+# Source unique de vérité : la version est lue directement depuis manifest.json (requis par HA & HACS)
+_MANIFEST_PATH = os.path.join(os.path.dirname(__file__), "manifest.json")
+try:
+    with open(_MANIFEST_PATH, "r", encoding="utf-8") as _f:
+        VERSION = json.load(_f).get("version", "unknown")
+except Exception:
+    VERSION = "unknown"
 
 # Endpoints API Tado
 TADO_AUTH_BASE = "https://login.tado.com/oauth2"
