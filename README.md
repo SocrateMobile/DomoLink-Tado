@@ -47,3 +47,13 @@ Intégration Home Assistant sur-mesure et pérenne pour vos équipements de chau
 2. Redémarrez Home Assistant.
 3. Allez dans **Paramètres** -> **Appareils et services** -> **Ajouter une intégration** -> **DomoLink-Tado**.
 4. Suivez les instructions affichées pour lier votre compte Tado.
+
+---
+
+## ☕ Soutenir le projet / Support
+
+Si vous appréciez cette intégration et souhaitez soutenir son développement continu ainsi que la maintenance des futures versions :
+
+<a href="https://buymeacoffee.com/Socrate" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" height="50" width="210">
+</a>
