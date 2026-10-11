@@ -10,7 +10,7 @@
       },
       "manual_home": {
         "title": "Saisie directe du Home ID (Bypass Rate Limit)",
-        "description": "Votre connexion Tado a réussi, mais les serveurs Tado appliquent actuellement une restriction temporaire de requêtes (100 requêtes/jour sur compte standard).\n\nPour finaliser immédiatement l'installation sans attendre la réinitialisation du quota Tado, renseignez votre identifiant de maison (**Home ID**) :\n\n- Rendez-vous sur [{tado_url}]({tado_url}) dans votre navigateur : le numéro est affiché directement dans la barre d'adresse après `/home/` (ex : `https://my.tado.com/webapp/#/home/123456/`).",
+        "description": "Votre connexion Tado a réussi, mais les serveurs Tado appliquent actuellement une restriction temporaire de requêtes (100 requêtes/jour sur compte standard).\n\nPour finaliser immédiatement l'installation sans attendre la réinitialisation du quota Tado, renseignez votre identifiant de maison (**Home ID**) :\n\n- Rendez-vous sur my.tado.com dans votre navigateur : le numéro est affiché directement dans la barre d'adresse après `/home/` (ex : `my.tado.com`).",
         "data": {
           "home_id": "Identifiant Domicile (Home ID)",
           "home_name": "Nom de la maison"

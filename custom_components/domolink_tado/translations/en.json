@@ -10,7 +10,7 @@
       },
       "manual_home": {
         "title": "Direct Home ID Entry (Bypass Rate Limit)",
-        "description": "Your Tado authentication succeeded, but Tado servers are currently rate-limiting your requests (100 req/day standard quota).\n\nTo complete setup immediately without waiting for your quota to reset, please provide your **Home ID**:\n\n- Open [{tado_url}]({tado_url}) in your browser: the ID number is visible in your URL bar after `/home/` (e.g. `https://my.tado.com/webapp/#/home/123456/`).",
+        "description": "Your Tado authentication succeeded, but Tado servers are currently rate-limiting your requests (100 req/day standard quota).\n\nTo complete setup immediately without waiting for your quota to reset, please provide your **Home ID**:\n\n- Open my.tado.com in your browser: the ID number is visible in your URL bar after `/home/` (e.g. `my.tado.com`).",
         "data": {
           "home_id": "Home ID",
           "home_name": "Home Name"
