@@ -1,4 +1,6 @@
 {
+  "domain": "domolink_tado",
+  "name": "DomoLink-Tado",
   "codeowners": [
     "@SocrateMobile",
     "@jflavigne"
@@ -9,12 +11,10 @@
     "http"
   ],
   "documentation": "https://github.com/SocrateMobile/DomoLink-Tado",
-  "domain": "domolink_tado",
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/SocrateMobile/DomoLink-Tado/issues",
-  "name": "DomoLink-Tado",
   "requirements": [
     "aiohttp"
   ],
-  "version": "1.5.18"
+  "version": "1.5.19"
 }
