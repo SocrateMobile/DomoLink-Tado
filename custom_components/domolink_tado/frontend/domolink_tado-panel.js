@@ -984,12 +984,14 @@ class DomolinkTadoPanel extends HTMLElement {
           justify-content: center;
           opacity: 0;
           pointer-events: none;
-          transition: opacity 0.25s ease;
+          visibility: hidden;
+          transition: opacity 0.25s ease, visibility 0.25s ease;
         }
 
         .modal-overlay.open {
           opacity: 1;
           pointer-events: auto;
+          visibility: visible;
         }
 
         .modal-card {
@@ -1142,10 +1144,15 @@ class DomolinkTadoPanel extends HTMLElement {
           position: absolute;
           top: 20px;
           left: 16px;
-          pointer-events: auto;
+          pointer-events: none;
           box-sizing: border-box;
           opacity: 0.35;
           z-index: 1;
+        }
+
+        .modal-overlay.open .scale-markers,
+        .modal-overlay.open .scale-line {
+          pointer-events: auto;
         }
 
         .scale-line {
