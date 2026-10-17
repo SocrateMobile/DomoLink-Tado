@@ -2979,7 +2979,7 @@ class DomolinkTadoPanel extends HTMLElement {
           z.target_temp = t.toFixed(1);
           const valSpan = card.querySelector(".quick-target-val");
           if (valSpan) valSpan.textContent = `${t.toFixed(1)}°`;
-          const style = getTileBackgroundGradient(z);
+          const style = getCardBackgroundStyle(z);
           card.style.background = style.background;
           card.style.borderColor = style.borderColor;
           this._applyTargetTemperature(z, t, 700);
@@ -2995,7 +2995,7 @@ class DomolinkTadoPanel extends HTMLElement {
           z.target_temp = t.toFixed(1);
           const valSpan = card.querySelector(".quick-target-val");
           if (valSpan) valSpan.textContent = `${t.toFixed(1)}°`;
-          const style = getTileBackgroundGradient(z);
+          const style = getCardBackgroundStyle(z);
           card.style.background = style.background;
           card.style.borderColor = style.borderColor;
           this._applyTargetTemperature(z, t, 700);
