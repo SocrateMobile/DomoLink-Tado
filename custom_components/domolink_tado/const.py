@@ -106,7 +106,7 @@ PLATFORMS: list[Platform] = [
     Platform.SWITCH,
     Platform.BUTTON,
     Platform.WATER_HEATER,
-    Platform.UPDATE,
+    
 ]
 
 # Frontend Panel
