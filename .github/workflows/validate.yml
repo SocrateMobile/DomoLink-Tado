@@ -1,0 +1,53 @@
+name: Validate DomoLink-Tado
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate-python:
+    name: Python & Code Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check Python syntax (compileall)
+        run: |
+          python3 -m compileall custom_components/domolink_tado
+
+      - name: Validate JSON files
+        run: |
+          python3 -c "import json, glob; [json.load(open(f, encoding='utf-8')) for f in glob.glob('**/*.json', recursive=True) if 'node_modules' not in f]"
+
+  hassfest:
+    name: Hassfest Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Hassfest
+        uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: HACS Action Validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run HACS Action
+        uses: hacs/action@main
+        with:
+          category: integration
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

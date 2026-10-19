@@ -1,4 +1,3 @@
-from homeassistant.helpers.service import async_register_admin_service
 """DomoLink-Tado — Intégration avancée et pérenne pour vos équipements Tado."""
 from __future__ import annotations
 
@@ -11,6 +10,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.service import async_register_admin_service
 
 try:
     from homeassistant.components.http import StaticPathConfig
