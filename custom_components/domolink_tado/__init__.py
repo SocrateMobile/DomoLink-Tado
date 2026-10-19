@@ -128,7 +128,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "module_url": panel_url,
                 }
             },
-            require_admin=False,
+            require_admin=True,
             update=True,
         )
         _LOGGER.info("DomoLink-Tado: Panneau latéral enregistré avec succès.")
