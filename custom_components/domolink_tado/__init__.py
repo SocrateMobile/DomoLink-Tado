@@ -1,3 +1,4 @@
+from homeassistant.helpers.service import async_register_admin_service
 """DomoLink-Tado — Intégration avancée et pérenne pour vos équipements Tado."""
 from __future__ import annotations
 
@@ -230,13 +231,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.services.has_service(DOMAIN, "set_temperature_offset"):
         hass.services.async_register(DOMAIN, "set_temperature_offset", handle_temp_offset)
     if not hass.services.has_service(DOMAIN, "save_room_labels"):
-        hass.helpers.service.async_register_admin_service(hass, DOMAIN, "save_room_labels", handle_save_labels)
+        async_register_admin_service(hass, DOMAIN, "save_room_labels", handle_save_labels)
     if not hass.services.has_service(DOMAIN, "save_room_sensors"):
-        hass.helpers.service.async_register_admin_service(hass, DOMAIN, "save_room_sensors", handle_save_room_sensors)
+        async_register_admin_service(hass, DOMAIN, "save_room_sensors", handle_save_room_sensors)
     if not hass.services.has_service(DOMAIN, "set_valve_calibration_mode"):
-        hass.helpers.service.async_register_admin_service(hass, DOMAIN, "set_valve_calibration_mode", handle_set_valve_calibration_mode)
+        async_register_admin_service(hass, DOMAIN, "set_valve_calibration_mode", handle_set_valve_calibration_mode)
     if not hass.services.has_service(DOMAIN, "reauthenticate"):
-        hass.helpers.service.async_register_admin_service(hass, DOMAIN, "reauthenticate", handle_reauthenticate)
+        async_register_admin_service(hass, DOMAIN, "reauthenticate", handle_reauthenticate)
 
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     return True
