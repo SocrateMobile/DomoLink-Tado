@@ -15,5 +15,5 @@
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/SocrateMobile/DomoLink-Tado/issues",
   "requirements": [],
-  "version": "1.5.28"
+  "version": "1.5.29"
 }
