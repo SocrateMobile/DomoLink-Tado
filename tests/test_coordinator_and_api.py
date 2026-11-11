@@ -2412,3 +2412,53 @@ class TestV1517QuotaOptimizationAndAttributes(unittest.IsolatedAsyncioTestCase):
         client.rate_limit_remaining = 35
         await coord._async_update_data()
         self.assertEqual(coord.update_interval, timedelta(seconds=900))
+
+    async def test_persistent_cache_offline_startup_under_circuit_breaker(self):
+        """Test instant offline startup without network calls when circuit breaker is active."""
+        import time
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.options = {}
+        client = TadoClient(MagicMock())
+        client.get_zone_states = AsyncMock()
+        client.get_zones = AsyncMock()
+        client.get_devices = AsyncMock()
+
+        coord = DomolinkTadoCoordinator(hass, entry, client, home_id=123, home_name="Test")
+
+        # Mock persistent cache with circuit breaker active for 5000s in future
+        future_until = time.time() + 5000.0
+        cached_payload = {
+            "zones_raw": [{"id": 1, "name": "Salon", "type": "HEATING", "devices": [{"serialNo": "VA123"}]}],
+            "devices_raw": [{"serialNo": "VA123"}],
+            "circuit_breaker": {
+                "rate_limited_until": future_until,
+                "remaining": 0,
+                "limit": 1000,
+                "reset_seconds": 5000,
+                "observed_at": time.time(),
+            },
+            "last_data": {
+                "home_id": 123,
+                "home_name": "Test",
+                "zones": {1: {"name": "Salon", "inside_temperature": 20.5}},
+            },
+        }
+        coord._cache_store.async_load = AsyncMock(return_value=cached_payload)
+        coord._cache_store.async_save = AsyncMock()
+
+        await coord.async_load_cache()
+
+        # Circuit breaker should be restored
+        self.assertEqual(client.rate_limited_until, future_until)
+        self.assertEqual(client.rate_limit_remaining, 0)
+        self.assertEqual(client.rate_limit_limit, 1000)
+        self.assertEqual(coord.data["zones"][1]["inside_temperature"], 20.5)
+
+        # Updating data while rate limited should return cache with 0 API calls
+        res = await coord._async_update_data()
+        self.assertEqual(res["zones"][1]["inside_temperature"], 20.5)
+        client.get_zone_states.assert_not_called()
+        client.get_zones.assert_not_called()
+        client.get_devices.assert_not_called()

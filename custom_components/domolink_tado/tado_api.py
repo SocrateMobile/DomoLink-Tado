@@ -392,6 +392,9 @@ class TadoClient:
         if self.rate_limit_remaining is not None or self.rate_limit_limit is not None:
             now_ts = time.time()
             self.rate_limit_last_update = now_ts
+            if self.rate_limit_remaining == 0:
+                cooldown = float(self.rate_limit_reset_seconds) if self.rate_limit_reset_seconds and self.rate_limit_reset_seconds > 0 else 3600.0
+                self.rate_limited_until = max(self.rate_limited_until, now_ts + cooldown)
             self.budget.update(
                 QuotaSnapshot(
                     limit=self.rate_limit_limit,
@@ -706,10 +709,20 @@ class TadoClient:
                         if 404 in tolerant_statuses:
                             return {}
                     if resp.status == 429:
-                        _rate_limit_wait = self._calculate_rate_limit_delay(resp, 0)
+                        reset_sec = self.rate_limit_reset_seconds
+                        rem = self.rate_limit_remaining
+                        cooldown = float(reset_sec) if reset_sec and reset_sec > 0 else 3600.0
+                        self.rate_limited_until = time.time() + cooldown
+                        _LOGGER.error(
+                            "Tado microservice Quota épuisé sur %s (remaining=%s, reset_in=%.0fs). Disjoncteur activé pour %.0fs.",
+                            target_url,
+                            rem,
+                            cooldown,
+                            cooldown,
+                        )
                         raise TadoRateLimitError(
                             f"Microservice request to {target_url} rate limited (429)",
-                            reset_seconds=_rate_limit_wait,
+                            reset_seconds=cooldown,
                         )
                     if resp.status in (401, 403):
                         if target_url != urls_to_try[-1]:

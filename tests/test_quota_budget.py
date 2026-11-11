@@ -105,6 +105,30 @@ class TestQuotaBudget(unittest.TestCase):
         # Schedules are never periodically polled in Free tier
         self.assertIsNone(self.budget.ttl("schedule"))
 
+    def test_tier_detection_standard(self):
+        """Test detection of Standard tier (~1000 req/day)."""
+        snap = QuotaSnapshot(limit=1000, remaining=800, reset_in=43200.0, observed_at=1000.0)
+        self.budget.update(snap)
+        self.assertEqual(self.budget.tier, "STANDARD")
+
+    def test_poll_interval_standard_smoothing(self):
+        """Test polling interval smoothing in Standard tier (q=1000)."""
+        snap = QuotaSnapshot(limit=1000, remaining=500, reset_in=43200.0, observed_at=1000.0)
+        self.budget.update(snap)
+        # Budget = 500 * 0.85 = 425 calls -> 43200 / 425 ≈ 101s
+        interval = self.budget.poll_interval(now=1000.0)
+        self.assertGreaterEqual(interval, 90)
+        self.assertLessEqual(interval, 150)
+
+    def test_can_spend_standard(self):
+        """Test spending rules in Standard tier."""
+        snap = QuotaSnapshot(limit=1000, remaining=140, reset_in=20000.0, observed_at=1000.0)
+        self.budget.update(snap)
+        self.assertTrue(self.budget.can_spend("command", cost=1))
+        # Poll requires reserve of 15% (150 calls)
+        self.assertFalse(self.budget.can_spend("poll", cost=1))
+        self.assertFalse(self.budget.can_spend("background", cost=1))
+
 
 if __name__ == "__main__":
     unittest.main()

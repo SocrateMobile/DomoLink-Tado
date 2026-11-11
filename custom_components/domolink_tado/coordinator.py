@@ -12,6 +12,7 @@ import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -133,6 +134,187 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._consecutive_failures: int = 0
         self._delayed_verification_task: asyncio.Task[Any] | None = None
         self.window_guard: Any = None
+        self._cache_store: Store[dict[str, Any]] = Store(
+            hass, 1, f"{DOMAIN}_cache_{getattr(entry, 'entry_id', home_id)}"
+        )
+
+    async def async_load_cache(self) -> None:
+        """Load persistent state cache from disk to allow instant offline startup."""
+        try:
+            cached = await self._cache_store.async_load()
+            if isinstance(cached, dict):
+                _LOGGER.debug("DomoLink-Tado: Chargement du cache d'état persistant depuis le disque")
+                self._zones_raw = cached.get("zones_raw", [])
+                self._devices_raw = cached.get("devices_raw", [])
+                self._weather_raw = cached.get("weather_raw", {})
+                self._home_state_raw = cached.get("home_state_raw", {})
+                self._graphql_devices_cache = cached.get("graphql_devices_cache", {})
+                self._minder_cache = cached.get("minder_cache", {})
+                self._energy_insights_cache = cached.get("energy_insights_cache", {})
+                self._boiler_system_details = cached.get("boiler_system_details", {})
+                self._last_discovery_time = cached.get("last_discovery_time", 0.0)
+
+                # Restauration de l'état du disjoncteur
+                circuit = cached.get("circuit_breaker", {})
+                if isinstance(circuit, dict):
+                    until = circuit.get("rate_limited_until", 0.0)
+                    now_ts = time.time()
+                    if isinstance(until, (int, float)) and until > now_ts:
+                        self.client.rate_limited_until = float(until)
+                        self.client.rate_limit_remaining = circuit.get("remaining", 0)
+                        self.client.rate_limit_limit = circuit.get("limit")
+                        self.client.rate_limit_reset_seconds = int(circuit.get("reset_seconds", max(1, until - now_ts)))
+                        from .quota_budget import QuotaSnapshot
+                        self.client.budget.update(
+                            QuotaSnapshot(
+                                limit=self.client.rate_limit_limit,
+                                remaining=self.client.rate_limit_remaining,
+                                reset_in=float(self.client.rate_limit_reset_seconds),
+                                observed_at=circuit.get("observed_at", now_ts),
+                            )
+                        )
+                        _LOGGER.warning(
+                            "DomoLink-Tado: Disjoncteur restauré depuis le disque. Pause active pour %.0fs.",
+                            until - now_ts,
+                        )
+
+                # Restauration des données du coordinateur
+                last_data = cached.get("last_data")
+                if isinstance(last_data, dict) and last_data.get("zones"):
+                    self.data = last_data
+                elif self._zones_raw:
+                    synthesized = self._synthesize_data_from_cache()
+                    if synthesized:
+                        self.data = synthesized
+        except Exception as err:
+            _LOGGER.warning("DomoLink-Tado: Erreur lors du chargement du cache disque: %s", err)
+
+    async def _async_save_cache(self) -> None:
+        """Save persistent state cache to disk."""
+        try:
+            circuit_data = {
+                "rate_limited_until": getattr(self.client, "rate_limited_until", 0.0),
+                "remaining": getattr(self.client, "rate_limit_remaining", None),
+                "limit": getattr(self.client, "rate_limit_limit", None),
+                "reset_seconds": getattr(self.client, "rate_limit_reset_seconds", None),
+                "observed_at": getattr(self.client, "rate_limit_last_update", time.time()),
+            }
+            cache_payload = {
+                "zones_raw": self._zones_raw,
+                "devices_raw": self._devices_raw,
+                "weather_raw": self._weather_raw,
+                "home_state_raw": self._home_state_raw,
+                "graphql_devices_cache": self._graphql_devices_cache,
+                "minder_cache": self._minder_cache,
+                "energy_insights_cache": self._energy_insights_cache,
+                "boiler_system_details": self._boiler_system_details,
+                "last_discovery_time": self._last_discovery_time,
+                "circuit_breaker": circuit_data,
+                "last_data": self.data,
+            }
+            await self._cache_store.async_save(cache_payload)
+        except Exception as err:
+            _LOGGER.debug("DomoLink-Tado: Impossible de sauvegarder le cache disque: %s", err)
+
+    def _synthesize_data_from_cache(self) -> dict[str, Any] | None:
+        """Build minimal coordinator data dictionary from cached raw topology."""
+        if not self._zones_raw:
+            return None
+
+        devices_by_serial: dict[str, dict[str, Any]] = {}
+        for dev in self._devices_raw:
+            serial = dev.get("serialNo")
+            if not serial:
+                continue
+            d_copy = dict(dev)
+            if serial in self._graphql_devices_cache:
+                gql_info = self._graphql_devices_cache[serial]
+                d_copy["graphql_id"] = gql_info.get("id")
+                if "dazzleEnabled" in gql_info:
+                    d_copy["dazzleEnabled"] = gql_info.get("dazzleEnabled")
+                if "supportsIdentify" in gql_info:
+                    d_copy["supportsIdentify"] = gql_info.get("supportsIdentify")
+                if "hasBadSignal" in gql_info:
+                    d_copy["hasBadSignal"] = gql_info.get("hasBadSignal")
+            devices_by_serial[serial] = d_copy
+
+        self.local_bridge.discover_local_entities()
+        labels_map = self.entry.options.get(CONF_ROOM_LABELS, {}) if self.entry else {}
+        zones_data: dict[int, dict[str, Any]] = {}
+
+        for z in self._zones_raw:
+            zid = z.get("id")
+            if zid is None:
+                continue
+            z_devices = [
+                devices_by_serial.get(d.get("serialNo", ""), d)
+                for d in z.get("devices", [])
+                if d.get("serialNo") in devices_by_serial
+            ]
+            room_labels = labels_map.get(str(zid), [])
+            if isinstance(room_labels, str):
+                room_labels = [lbl.strip() for lbl in room_labels.split(",") if lbl.strip()]
+
+            zones_data[zid] = {
+                "info": z,
+                "state": {},
+                "name": z.get("name", f"Zone {zid}"),
+                "zone_id": zid,
+                "type": z.get("type", "HEATING"),
+                "inside_temperature": None,
+                "raw_inside_temperature": None,
+                "humidity": None,
+                "raw_humidity": None,
+                "is_external_temp": False,
+                "is_external_humidity": False,
+                "target_temperature": 20.0,
+                "power": "OFF",
+                "heating_power": 0.0,
+                "ac_mode": None,
+                "fan_speed": None,
+                "swing": None,
+                "overlay": None,
+                "is_overlay_active": False,
+                "open_window": None,
+                "rapid_window_drop": False,
+                "heating_rate": DEFAULT_HEATING_RATE,
+                "preheat_advisor": None,
+                "preheat_duration": 0,
+                "preheat_target_temp": None,
+                "preheat_now": False,
+                "dew_point": None,
+                "absolute_humidity": None,
+                "mold_risk_level": "FAIBLE",
+                "mold_risk_problem": False,
+                "ventilation_recommended": False,
+                "devices": z_devices,
+                "labels": room_labels,
+            }
+
+        return {
+            "home_id": self.home_id,
+            "home_name": self.home_name,
+            "zones": zones_data,
+            "devices": devices_by_serial,
+            "weather": {
+                "outdoor_temperature": None,
+                "outdoor_humidity": None,
+                "outdoor_dew_point": None,
+                "outdoor_absolute_humidity": None,
+                "weather_state": "CLEAR",
+                "solar_intensity": 0,
+            },
+            "home_state": self._home_state_raw or {"presence": "HOME"},
+            "presence": (self._home_state_raw or {}).get("presence", "HOME"),
+            "active_heating_zones": 0,
+            "total_heating_power": 0.0,
+            "rate_limit": self.client.rate_limit_info,
+            "boiler_care": self._minder_cache or {},
+            "energy_insights": self._energy_insights_cache or {},
+            "local_bridge_active": self.local_bridge.has_local_entities,
+            "local_bridge_zones": dict(self.local_bridge._zone_to_local_entity),
+            "last_update": datetime.now().isoformat(),
+        }
 
     def _schedule_coalesced_verification(self, delay: float = 45.0) -> None:
         """Schedule a coalesced delayed verification refresh to avoid duplicate API calls."""
@@ -237,9 +419,13 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "DomoLink-Tado: Disjoncteur API actif (quota Tado épuisé). Données servies depuis le cache local (pause restante: %.0fs).",
                     remaining_cooldown,
                 )
-                self.update_interval = timedelta(seconds=min(max(int(remaining_cooldown) + 5, 60), 900))
+                self.update_interval = timedelta(seconds=min(max(int(remaining_cooldown) + 5, 60), 3600))
                 if self.data and self.data.get("zones"):
                     return self.data
+                synthesized = self._synthesize_data_from_cache()
+                if synthesized:
+                    self.data = synthesized
+                    return synthesized
                 raise UpdateFailed(
                     f"Quota Tado temporairement indisponible (disjoncteur actif pour encore {int(remaining_cooldown)}s). En attente de renouvellement du quota."
                 )
@@ -284,13 +470,11 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # 1. Cache zones et matériel pour préserver le quota journalier Tado
             if not self._zones_raw or not self._devices_raw or (now - self._last_discovery_time > discovery_cache_ttl):
                 try:
-                    _LOGGER.debug("DomoLink-Tado: Découverte des zones et équipements...")
-                    z_res, d_res = await asyncio.gather(
-                        self.client.get_zones(self.home_id),
-                        self.client.get_devices(self.home_id),
-                    )
-                    self._zones_raw = z_res or []
-                    self._devices_raw = d_res or []
+                    _LOGGER.debug("DomoLink-Tado: Découverte séquentielle des zones et équipements...")
+                    if not self._zones_raw or (now - self._last_discovery_time > discovery_cache_ttl):
+                        self._zones_raw = await self.client.get_zones(self.home_id) or []
+                    if not self._devices_raw or (now - self._last_discovery_time > discovery_cache_ttl):
+                        self._devices_raw = await self.client.get_devices(self.home_id) or []
                     self._last_discovery_time = now
 
                     # Résolution du nom réel du domicile s'il est générique
@@ -304,6 +488,10 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 except Exception as err:
                     _LOGGER.warning("DomoLink-Tado: Échec rafraîchissement zones/matériels (%s), utilisation cache", err)
                     if not self._zones_raw or not self._devices_raw:
+                        synthesized = self._synthesize_data_from_cache()
+                        if synthesized:
+                            self.data = synthesized
+                            return synthesized
                         raise
 
 
@@ -497,7 +685,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 zones_needing_sched = [
                     z.get("id") for z in self._zones_raw
                     if z.get("id") is not None
-                    and (not self._zone_schedules_raw.get(z.get("id")) or (now - self._last_schedule_fetch_time.get(z.get("id"), 0.0) > 21600))
+                    and (z.get("id") not in self._last_schedule_fetch_time or (now - self._last_schedule_fetch_time.get(z.get("id"), 0.0) > 21600))
                 ]
                 if zones_needing_sched:
                     async def _fetch_zone_sched(zone_id: int) -> None:
@@ -507,8 +695,9 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 blocks = await self.client.get_timetable_blocks(self.home_id, zone_id, active_tt["id"])
                                 if blocks is not None:
                                     self._zone_schedules_raw[zone_id] = blocks
-                                    self._last_schedule_fetch_time[zone_id] = now
+                            self._last_schedule_fetch_time[zone_id] = now
                         except Exception as err:
+                            self._last_schedule_fetch_time[zone_id] = now
                             _LOGGER.debug("DomoLink-Tado: Impossible de charger le planning pour la zone %s: %s", zone_id, err)
 
                     await asyncio.gather(*[_fetch_zone_sched(zid) for zid in zones_needing_sched], return_exceptions=True)
@@ -747,26 +936,8 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                     current_rate,
                                 )
 
-                # Récupération du planning de la zone (mis en cache 6h pour respecter les quotas API)
+                # Récupération du planning de la zone (mis en cache via le pré-chargement)
                 timetable_blocks = self._zone_schedules_raw.get(zid, [])
-                last_sched_time = self._last_schedule_fetch_time.get(zid, 0.0)
-                if preheat_enabled and (not timetable_blocks or (now - last_sched_time > 21600)):
-                    try:
-                        active_tt = await self.client.get_active_timetable(self.home_id, zid)
-                        if active_tt and "id" in active_tt:
-                            blocks = await self.client.get_timetable_blocks(
-                                self.home_id, zid, active_tt["id"]
-                            )
-                            if blocks is not None:
-                                self._zone_schedules_raw[zid] = blocks
-                                self._last_schedule_fetch_time[zid] = now
-                                timetable_blocks = blocks
-                    except Exception as err:
-                        _LOGGER.debug(
-                            "DomoLink-Tado: Impossible de charger le planning pour la zone %s: %s",
-                            zid,
-                            err,
-                        )
 
                 # Calcul de la préchauffe adaptative locale
                 preheat_now = False
@@ -906,7 +1077,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Succès : réinitialiser le compteur d'échecs consécutifs
             self._consecutive_failures = 0
 
-            return {
+            result_data = {
                 "home_id": self.home_id,
                 "home_name": self.home_name,
                 "zones": zones_data,
@@ -930,6 +1101,8 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "local_bridge_zones": dict(self.local_bridge._zone_to_local_entity),
                 "last_update": datetime.now().isoformat(),
             }
+            await self._async_save_cache()
+            return result_data
 
         except TadoAuthError as err:
             _LOGGER.error("Erreur d'authentification auprès de Tado: %s", err)
@@ -940,9 +1113,14 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 err,
             )
             cooldown = err.reset_seconds if err.reset_seconds and err.reset_seconds > 0 else 300.0
-            self.update_interval = timedelta(seconds=min(max(int(cooldown) + 5, 60), 900))
+            self.update_interval = timedelta(seconds=min(max(int(cooldown) + 5, 60), 3600))
+            await self._async_save_cache()
             if self.data and self.data.get("zones"):
                 return self.data
+            synthesized = self._synthesize_data_from_cache()
+            if synthesized:
+                self.data = synthesized
+                return synthesized
             raise UpdateFailed(
                 f"Quota API Tado dépassé lors du premier chargement: {err}. Réessai automatique dans {int(cooldown)}s."
             ) from err

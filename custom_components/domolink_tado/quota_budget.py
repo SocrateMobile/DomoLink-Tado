@@ -9,8 +9,8 @@ from typing import Literal
 
 _LOGGER = logging.getLogger(__name__)
 
-Tier = Literal["FREE", "ASSIST", "UNKNOWN"]
-Resource = Literal["discovery", "weather", "home_state", "schedule", "day_report"]
+Tier = Literal["FREE", "STANDARD", "ASSIST", "UNKNOWN"]
+Resource = Literal["discovery", "weather", "home_state", "schedule", "day_report", "graphql_devices", "minder", "energy_insights"]
 SpendKind = Literal["command", "poll", "background"]
 
 
@@ -48,14 +48,16 @@ class QuotaBudget:
 
     @property
     def tier(self) -> Tier:
-        """Detect Tado quota tier (FREE ~100/day, ASSIST ~20000/day, or UNKNOWN)."""
+        """Detect Tado quota tier (FREE ~100/day, STANDARD ~1000/day, ASSIST ~20000/day, or UNKNOWN)."""
         if self._manual_tier_override:
             return self._manual_tier_override
         if not self.snapshot or self.snapshot.limit is None:
             return "UNKNOWN"
         if self.snapshot.limit <= 250:
             return "FREE"
-        if self.snapshot.limit >= 5000:
+        if self.snapshot.limit <= 2000:
+            return "STANDARD"
+        if self.snapshot.limit >= 2000:
             return "ASSIST"
         return "UNKNOWN"
 
@@ -100,20 +102,24 @@ class QuotaBudget:
                 return 600  # 10 minutes at night
             return 300      # 5 minutes normal rest
 
-        # Tier FREE (100 req/day max): strictly smooth remaining calls until reset
-        if tier == "FREE" and self.snapshot and self.snapshot.remaining is not None:
+        # Tier FREE (~100 req/day) & STANDARD (~1000 req/day): strictly smooth remaining calls until reset
+        if tier in ("FREE", "STANDARD") and self.snapshot and self.snapshot.remaining is not None:
             rem = max(0, self.snapshot.remaining)
-            if rem <= 5:
+            reserve_pct = 0.25 if tier == "FREE" else 0.15
+            min_reserve = 5 if tier == "FREE" else 20
+            min_floor = 180 if tier == "FREE" else 90
+
+            if rem <= min_reserve:
                 return 3600  # Safety fallback: 1 hour if almost exhausted
-            # Budget calls for polling: keep 25% for user interactive commands
-            poll_budget = max(1.0, rem * (1.0 - self.COMMAND_RESERVE))
+
+            poll_budget = max(1.0, rem * (1.0 - reserve_pct))
             reset_secs = self.seconds_to_reset(curr)
             calculated = int(reset_secs / poll_budget)
 
             if quiet_hours and not heating_active:
                 calculated = int(calculated * 1.5)
 
-            return max(self.MIN_INTERVAL, min(self.MAX_INTERVAL, calculated))
+            return max(min_floor, min(self.MAX_INTERVAL, calculated))
 
         # Tier UNKNOWN (fallback to adaptive logic preserving compatibility)
         if self.snapshot and self.snapshot.remaining is not None:
@@ -151,6 +157,22 @@ class QuotaBudget:
             if resource == "graphql_devices":
                 return 21600  # 6 hours
             if resource == "minder":
+                return 21600  # 6 hours
+            if resource == "energy_insights":
+                return 43200  # 12 hours
+
+        elif tier == "STANDARD":
+            if resource == "discovery":
+                return 43200  # 12 hours
+            if resource == "weather":
+                return None if has_ha_weather else 7200  # 2 hours
+            if resource == "home_state":
+                return None if has_ha_geofencing else 3600  # 1 hour
+            if resource == "schedule":
+                return 21600  # 6 hours
+            if resource == "day_report":
+                return 86400
+            if resource in ("graphql_devices", "minder"):
                 return 21600  # 6 hours
             if resource == "energy_insights":
                 return 43200  # 12 hours
@@ -206,13 +228,18 @@ class QuotaBudget:
                 # Keep the command reserve intact
                 reserved = max(5, int((self.snapshot.limit or 100) * self.COMMAND_RESERVE))
                 return (rem - cost) >= reserved
+            if self.tier == "STANDARD":
+                reserved = max(15, int((self.snapshot.limit or 1000) * 0.15))
+                return (rem - cost) >= reserved
             return rem >= cost
 
         if kind == "background":
             # Background tasks (schedule pre-fetch, automatic offset adjustments)
-            # require at least 30% quota in Free tier, or at least 100 in Assist
+            # require sufficient quota buffer
             if self.tier == "FREE":
                 return rem > 30
+            if self.tier == "STANDARD":
+                return rem > 150
             if self.tier == "ASSIST":
                 return rem > 100
             return rem > 50
