@@ -26,7 +26,11 @@ async def async_setup_entry(
     coordinator: DomolinkTadoCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
 
     # 1. Global Home Binary Sensors
-    async_add_entities([DomolinkTadoPresenceBinarySensor(coordinator)])
+    async_add_entities([
+        DomolinkTadoPresenceBinarySensor(coordinator),
+        DomolinkTadoBoilerIncidentBinarySensor(coordinator),
+        DomolinkTadoLocalBridgeActiveBinarySensor(coordinator),
+    ])
 
     # 2. Zone & Device Binary Sensors (Découverte dynamique)
     added_zone_binary_sensors: set[int] = set()
@@ -44,12 +48,14 @@ async def async_setup_entry(
                 new_binary_sensors.append(DomolinkTadoZoneVentilationRecommendedBinarySensor(coordinator, zone_id))
                 new_binary_sensors.append(DomolinkTadoZonePreheatNowBinarySensor(coordinator, zone_id))
                 new_binary_sensors.append(DomolinkTadoZoneRapidWindowDropBinarySensor(coordinator, zone_id))
+                new_binary_sensors.append(DomolinkTadoZoneWindowGuardBinarySensor(coordinator, zone_id))
                 added_zone_binary_sensors.add(zone_id)
 
         devices = (coordinator.data or {}).get("devices", {})
         for serial in devices:
             if serial not in added_device_binary_sensors:
                 new_binary_sensors.append(DomolinkTadoDeviceConnectionBinarySensor(coordinator, serial))
+                new_binary_sensors.append(DomolinkTadoDeviceBadSignalBinarySensor(coordinator, serial))
                 dev = devices.get(serial, {})
                 if "batteryState" in dev:
                     new_binary_sensors.append(DomolinkTadoDeviceBatteryAlertBinarySensor(coordinator, serial))
@@ -168,7 +174,18 @@ class DomolinkTadoZoneMoldRiskProblemBinarySensor(DomolinkTadoZoneBinarySensorBa
 
     @property
     def is_on(self) -> bool:
-        return bool(self._zone_data.get("mold_risk_problem", False))
+        local_risk = bool(self._zone_data.get("mold_risk_problem", False))
+        insights = (self.coordinator.data or {}).get("energy_insights", {})
+        tado_notif = self.zone_id in insights.get("mold_risk_room_ids", [])
+        return local_risk or tado_notif
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        insights = (self.coordinator.data or {}).get("energy_insights", {})
+        return {
+            "tado_cloud_alert": self.zone_id in insights.get("mold_risk_room_ids", []),
+            "local_physics_risk": self._zone_data.get("mold_risk_level", "NORMAL"),
+        }
 
 
 class DomolinkTadoZoneVentilationRecommendedBinarySensor(DomolinkTadoZoneBinarySensorBase):
@@ -215,6 +232,38 @@ class DomolinkTadoZoneRapidWindowDropBinarySensor(DomolinkTadoZoneBinarySensorBa
     @property
     def is_on(self) -> bool:
         return bool(self._zone_data.get("rapid_window_drop", False))
+
+
+class DomolinkTadoZoneWindowGuardBinarySensor(DomolinkTadoZoneBinarySensorBase):
+    """Binary sensor indicating active window guard (window open / heating cutoff)."""
+
+    _attr_device_class = BinarySensorDeviceClass.WINDOW
+    _attr_icon = "mdi:window-open-variant"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator, zone_id: int) -> None:
+        super().__init__(coordinator, zone_id)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{zone_id}_window_guard"
+        self._attr_name = f"{self._zone_data.get('name', 'Zone')} Garde Fenêtre"
+
+    @property
+    def is_on(self) -> bool:
+        wg = getattr(self.coordinator, "window_guard", None)
+        if wg is not None:
+            return wg.is_window_open(self.zone_id)
+        return False
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        wg = getattr(self.coordinator, "window_guard", None)
+        if wg is not None:
+            ep = wg.get_episode(self.zone_id)
+            if ep is not None:
+                return {
+                    "reason": ep.reason,
+                    "started_at": ep.started_at,
+                    "we_own_overlay": ep.we_own_overlay,
+                }
+        return {}
 
 
 # ── Device Binary Sensors ───────────────────────────────────
@@ -269,3 +318,89 @@ class DomolinkTadoDeviceConnectionBinarySensor(DomolinkTadoDeviceBinarySensorBas
     @property
     def is_on(self) -> bool:
         return bool((self._device_data.get("connectionState") or {}).get("value", True))
+
+
+class DomolinkTadoDeviceBadSignalBinarySensor(DomolinkTadoDeviceBinarySensorBase):
+    """Binary sensor indicating poor radio signal to bridge via low-level GraphQL telemetry."""
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_icon = "mdi:wifi-alert"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator, serial_number: str) -> None:
+        super().__init__(coordinator, serial_number)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{serial_number}_bad_signal"
+        self._attr_name = f"Tado {serial_number} Signal Radio Faible"
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._device_data.get("hasBadSignal", False))
+
+
+class DomolinkTadoBoilerIncidentBinarySensor(CoordinatorEntity[DomolinkTadoCoordinator], BinarySensorEntity):
+    """Binary sensor for Boiler Care incidents (pressure drop, burner anomalies) via minder.tado.com."""
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+    _attr_icon = "mdi:water-boiler-alert"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_boiler_incident"
+        self._attr_name = "Tado Alerte Chaudière (Boiler Care)"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
+            name=self.coordinator.formatted_home_name,
+            manufacturer="Tado (DomoLink)",
+            model="Home Hub",
+        )
+
+    @property
+    def is_on(self) -> bool:
+        care = (self.coordinator.data or {}).get("boiler_care", {})
+        return bool(care.get("has_active_incident", False))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        care = (self.coordinator.data or {}).get("boiler_care", {})
+        return {
+            "boiler_present": care.get("boiler_present", False),
+            "boiler_id": care.get("boiler_id"),
+            "boiler_model": care.get("boiler_model", ""),
+            "incidents": care.get("incidents", []),
+            "incident_count": len(care.get("incidents", [])),
+        }
+
+
+class DomolinkTadoLocalBridgeActiveBinarySensor(CoordinatorEntity[DomolinkTadoCoordinator], BinarySensorEntity):
+    """Binary sensor indicating if direct local LAN bridge bypass (HomeKit/Matter) is active."""
+
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_icon = "mdi:lan-connect"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_local_bridge_active"
+        self._attr_name = "Tado Pont Local LAN Actif"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
+            name=self.coordinator.formatted_home_name,
+            manufacturer="Tado (DomoLink)",
+            model="Home Hub",
+        )
+
+    @property
+    def is_on(self) -> bool:
+        return bool((self.coordinator.data or {}).get("local_bridge_active", False))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "local_zones_mapped": (self.coordinator.data or {}).get("local_bridge_zones", {}),
+            "local_zones_count": len((self.coordinator.data or {}).get("local_bridge_zones", {})),
+        }
+

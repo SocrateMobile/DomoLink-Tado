@@ -19,10 +19,19 @@ from .const import (
     TADO_API_BASE,
     TADO_CLIENT_ID,
     TADO_DEVICE_AUTH_URL,
+    TADO_GRAPHQL_FALLBACK_URL,
+    TADO_GRAPHQL_URL,
+    TADO_HOPS_FALLBACK_URL,
+    TADO_HOPS_API_URL,
+    TADO_IVAR_FALLBACK_URL,
+    TADO_IVAR_GRAPHQL_URL,
+    TADO_MINDER_FALLBACK_URL,
+    TADO_MINDER_API_URL,
     TADO_SCOPE,
     TADO_TOKEN_URL,
     VERSION,
 )
+from .quota_budget import QuotaBudget, QuotaSnapshot, Tier
 
 _LOGGER = logging.getLogger(__name__)
 DEFAULT_USER_AGENT = "PyTado/0.18.16"
@@ -92,6 +101,7 @@ class TadoClient:
         self.rate_limit_last_update: float | None = None
         self.rate_limited_until: float = 0.0
         self.requests_count: int = 0
+        self.budget: QuotaBudget = QuotaBudget()
 
     @staticmethod
     async def request_device_code(session: aiohttp.ClientSession) -> TadoDeviceAuthResponse:
@@ -305,12 +315,16 @@ class TadoClient:
 
     def _parse_ratelimit_headers(self, headers: Any) -> None:
         """Parse RFC RateLimit and RateLimit-Policy headers returned by Tado."""
-        if not headers:
+        if not headers or not hasattr(headers, "get"):
             return
 
-        policy = headers.get("RateLimit-Policy") or headers.get("ratelimit-policy") or ""
-        rl = headers.get("RateLimit") or headers.get("ratelimit") or ""
-        reset_hdr = headers.get("RateLimit-Reset") or headers.get("ratelimit-reset") or ""
+        def _get_str(k: str) -> str:
+            v = headers.get(k)
+            return str(v) if isinstance(v, (str, int, float)) else ""
+
+        policy = _get_str("RateLimit-Policy") or _get_str("ratelimit-policy")
+        rl = _get_str("RateLimit") or _get_str("ratelimit")
+        reset_hdr = _get_str("RateLimit-Reset") or _get_str("ratelimit-reset")
 
         limit_match = _QUOTA_REGEX.search(policy)
         if limit_match:
@@ -340,7 +354,7 @@ class TadoClient:
 
         # Fallback pour passerelles utilisant les en-têtes X-RateLimit-*
         if self.rate_limit_limit is None:
-            x_limit = headers.get("X-RateLimit-Limit") or headers.get("x-ratelimit-limit")
+            x_limit = _get_str("X-RateLimit-Limit") or _get_str("x-ratelimit-limit")
             if x_limit:
                 try:
                     self.rate_limit_limit = int(x_limit)
@@ -348,7 +362,7 @@ class TadoClient:
                     pass
 
         if self.rate_limit_remaining is None:
-            x_rem = headers.get("X-RateLimit-Remaining") or headers.get("x-ratelimit-remaining")
+            x_rem = _get_str("X-RateLimit-Remaining") or _get_str("x-ratelimit-remaining")
             if x_rem:
                 try:
                     self.rate_limit_remaining = int(x_rem)
@@ -356,7 +370,7 @@ class TadoClient:
                     pass
 
         if self.rate_limit_reset_seconds is None:
-            x_reset = headers.get("X-RateLimit-Reset") or headers.get("x-ratelimit-reset")
+            x_reset = _get_str("X-RateLimit-Reset") or _get_str("x-ratelimit-reset")
             if x_reset:
                 try:
                     self.rate_limit_reset_seconds = int(x_reset)
@@ -364,7 +378,7 @@ class TadoClient:
                     pass
 
         if self.rate_limit_reset_seconds is None:
-            retry_after = headers.get("Retry-After") or headers.get("retry-after")
+            retry_after = _get_str("Retry-After") or _get_str("retry-after")
             if retry_after:
                 try:
                     ra_val = float(retry_after)
@@ -376,7 +390,16 @@ class TadoClient:
                     pass
 
         if self.rate_limit_remaining is not None or self.rate_limit_limit is not None:
-            self.rate_limit_last_update = time.time()
+            now_ts = time.time()
+            self.rate_limit_last_update = now_ts
+            self.budget.update(
+                QuotaSnapshot(
+                    limit=self.rate_limit_limit,
+                    remaining=self.rate_limit_remaining,
+                    reset_in=float(self.rate_limit_reset_seconds) if self.rate_limit_reset_seconds is not None else None,
+                    observed_at=now_ts,
+                )
+            )
 
     @property
     def rate_limit_info(self) -> dict[str, Any]:
@@ -402,6 +425,8 @@ class TadoClient:
             "circuit_breaker_active": is_blocked,
             "cooldown_remaining_seconds": round(remaining_cooldown, 1),
             "last_update": self.rate_limit_last_update,
+            "tier": self.budget.tier,
+            "seconds_to_reset": round(self.budget.seconds_to_reset(now), 1),
         }
 
     async def async_refresh_token(self) -> str:
@@ -626,6 +651,94 @@ class TadoClient:
             reset_seconds=self.rate_limit_reset_seconds or 60.0,
         )
 
+    async def _microservice_request(
+        self,
+        method: str,
+        primary_url: str,
+        fallback_url: str | None = None,
+        json_data: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+        timeout: float = 15.0,
+        tolerant_statuses: tuple[int, ...] = (204, 404),
+    ) -> Any:
+        """Execute an authenticated request against a Tado microservice with automatic fallback."""
+        now = time.time()
+        if now < self.rate_limited_until:
+            remaining_cooldown = self.rate_limited_until - now
+            raise TadoRateLimitError(
+                f"Appel microservice {primary_url} bloqué localement : quota Tado épuisé (réessai dans {remaining_cooldown:.0f}s)",
+                reset_seconds=remaining_cooldown,
+            )
+
+        token = await self.async_get_valid_token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "X-Amzn-Trace-Id": "tado=webapp-3922",
+            "Referer": DEFAULT_REFERER,
+            "User-Agent": DEFAULT_USER_AGENT,
+        }
+
+        urls_to_try = [primary_url]
+        if fallback_url and fallback_url != primary_url:
+            urls_to_try.append(fallback_url)
+
+        last_error: Exception | None = None
+        for target_url in urls_to_try:
+            try:
+                self.requests_count += 1
+                client_timeout = (
+                    aiohttp.ClientTimeout(total=timeout)
+                    if hasattr(aiohttp, "ClientTimeout")
+                    else timeout
+                )
+                async with self.session.request(
+                    method, target_url, json=json_data, params=params, headers=headers, timeout=client_timeout
+                ) as resp:
+                    self._parse_ratelimit_headers(resp.headers)
+                    if resp.status == 204:
+                        return {}
+                    if resp.status == 404:
+                        if target_url != urls_to_try[-1]:
+                            _LOGGER.debug("Microservice 404 on %s, trying fallback %s", target_url, urls_to_try[-1])
+                            continue
+                        if 404 in tolerant_statuses:
+                            return {}
+                    if resp.status == 429:
+                        _rate_limit_wait = self._calculate_rate_limit_delay(resp, 0)
+                        raise TadoRateLimitError(
+                            f"Microservice request to {target_url} rate limited (429)",
+                            reset_seconds=_rate_limit_wait,
+                        )
+                    if resp.status in (401, 403):
+                        if target_url != urls_to_try[-1]:
+                            _LOGGER.debug("Microservice auth/permission issue on %s (status %s), trying fallback", target_url, resp.status)
+                            continue
+                        text = await resp.text()
+                        raise TadoAuthError(f"Microservice request to {target_url} unauthorized ({resp.status}): {text}")
+                    if resp.status not in (200, 201):
+                        text = await resp.text()
+                        if target_url != urls_to_try[-1]:
+                            _LOGGER.debug("Microservice error on %s (status %s), trying fallback", target_url, resp.status)
+                            continue
+                        raise TadoError(f"Microservice request to {target_url} failed ({resp.status}): {text}")
+
+                    try:
+                        data = await resp.json()
+                        return data if data is not None else {}
+                    except (ValueError, aiohttp.ContentTypeError):
+                        return {}
+            except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+                last_error = err
+                _LOGGER.debug("Network error contacting microservice %s: %s", target_url, err)
+                if target_url != urls_to_try[-1]:
+                    continue
+
+        if last_error:
+            raise TadoError(f"Impossible de joindre le microservice Tado ({primary_url}): {last_error}") from last_error
+        return {}
+
     # ── High-level API endpoints ──────────────────────────────
 
     async def get_me(self) -> dict[str, Any]:
@@ -796,3 +909,229 @@ class TadoClient:
     async def get_temperature_offset(self, device_serial: str) -> dict[str, Any]:
         """Get current temperature calibration offset for a device."""
         return await self._request("GET", f"/devices/{device_serial}/temperatureOffset")
+
+    # ── Microservices Tado v10.9 (GraphQL, Ivar, Minder, Hops) ──
+
+    async def async_graphql(
+        self,
+        query: str,
+        variables: dict[str, Any] | None = None,
+        operation_name: str | None = None,
+        endpoint: str = TADO_GRAPHQL_URL,
+        fallback_endpoint: str | None = TADO_GRAPHQL_FALLBACK_URL,
+    ) -> dict[str, Any]:
+        """Execute a GraphQL query or mutation against Tado GraphQL microservices."""
+        payload: dict[str, Any] = {
+            "query": query,
+            "variables": variables or {},
+        }
+        if operation_name:
+            payload["operationName"] = operation_name
+
+        res = await self._microservice_request(
+            "POST",
+            endpoint,
+            fallback_url=fallback_endpoint,
+            json_data=payload,
+        )
+        if isinstance(res, dict) and "errors" in res and res["errors"]:
+            _LOGGER.warning("Tado GraphQL query had errors: %s", res["errors"])
+        return res.get("data") or {} if isinstance(res, dict) else {}
+
+    async def get_graphql_devices(self, home_id: int) -> list[dict[str, Any]]:
+        """Fetch low-level device attributes and hardware capabilities via GraphQL."""
+        query = """
+        query Devices($homeId: ID!) {
+          home(id: $homeId) {
+            devices {
+              all {
+                id
+                serialNumber
+                ... on CanDazzle { dazzleEnabled }
+                ... on CanIdentify { supportsIdentify }
+                ... on CanConfigureControlMode { controlMode }
+                ... on CanConfigureRelayMode { relayMode }
+                ... on HasThermInterface { thermInterfaceType }
+                ... on ReportsBadSignal { hasBadSignal }
+              }
+            }
+          }
+        }
+        """
+        data = await self.async_graphql(query, variables={"homeId": str(home_id)})
+        return (data.get("home", {}).get("devices", {}).get("all") or []) if isinstance(data, dict) else []
+
+    async def identify_device(self, device_id: str) -> dict[str, Any]:
+        """Blink the LED screen of a physical radiator valve or thermostat to locate it."""
+        query = """
+        mutation IdentifyDevice($deviceId: ID!) {
+          identifyDevice(deviceId: $deviceId) {
+            success
+            failureReason
+          }
+        }
+        """
+        data = await self.async_graphql(query, variables={"deviceId": str(device_id)})
+        return (data.get("identifyDevice") or {}) if isinstance(data, dict) else {}
+
+    async def reboot_device(self, device_id: str) -> dict[str, Any]:
+        """Remotely reboot a physical Tado device (bridge, valve, thermostat)."""
+        query = """
+        mutation RebootDevice($deviceId: ID!) {
+          rebootDevice(deviceId: $deviceId) {
+            success
+            failureReason
+          }
+        }
+        """
+        data = await self.async_graphql(query, variables={"deviceId": str(device_id)})
+        return (data.get("rebootDevice") or {}) if isinstance(data, dict) else {}
+
+    async def set_device_dazzle(self, device_id: str, enabled: bool) -> dict[str, Any]:
+        """Toggle inverted / bright LED display mode (Dazzle) on a device."""
+        query = """
+        mutation SetDeviceDazzleEnabled($deviceId: ID!, $enabled: Boolean!) {
+          setDeviceDazzleEnabled(deviceId: $deviceId, enabled: $enabled) {
+            success
+            failureReason
+          }
+        }
+        """
+        data = await self.async_graphql(query, variables={"deviceId": str(device_id), "enabled": bool(enabled)})
+        return (data.get("setDeviceDazzleEnabled") or {}) if isinstance(data, dict) else {}
+
+    async def set_relay_mode(self, device_id: str, relay_mode: str) -> dict[str, Any]:
+        """Configure relay operating mode on boiler interface."""
+        query = """
+        mutation SetRelayMode($deviceId: ID!, $relayMode: RelayMode!) {
+          setRelayMode(deviceId: $deviceId, relayMode: $relayMode) {
+            success
+            failureReason
+          }
+        }
+        """
+        data = await self.async_graphql(query, variables={"deviceId": str(device_id), "relayMode": str(relay_mode)})
+        return (data.get("setRelayMode") or {}) if isinstance(data, dict) else {}
+
+    async def get_ivar_boiler_details(self, system_id: int) -> dict[str, Any]:
+        """Lookup boiler manufacturer and model specifications via ivar.tado.com."""
+        query = """
+        query system($id: Int!) {
+          system(id: $id) {
+            id
+            modelName
+            shortModelName: modelName(type: SHORT)
+            manufacturers {
+              name
+            }
+          }
+        }
+        """
+        data = await self.async_graphql(
+            query,
+            variables={"id": int(system_id)},
+            endpoint=TADO_IVAR_GRAPHQL_URL,
+            fallback_endpoint=TADO_IVAR_FALLBACK_URL,
+        )
+        return (data.get("system") or {}) if isinstance(data, dict) else {}
+
+    async def get_heating_system(self, home_id: int) -> dict[str, Any]:
+        """Fetch connected heating system details (boiler id, underfloor heating)."""
+        return await self._request("GET", f"/homes/{home_id}/heatingSystem")
+
+    async def get_boiler_incidents(self, home_id: int) -> list[dict[str, Any]]:
+        """Retrieve active boiler incidents (pressure drop, burner error) from minder.tado.com."""
+        primary = f"{TADO_MINDER_API_URL}/homes/{home_id}/incidents"
+        fallback = f"{TADO_MINDER_FALLBACK_URL}/homes/{home_id}/incidents"
+        res = await self._microservice_request("GET", primary, fallback_url=fallback)
+        if isinstance(res, list):
+            return res
+        if isinstance(res, dict):
+            return res.get("incidents", []) or []
+        return []
+
+    async def get_burner_running_times(self, home_id: int, from_date: str, to_date: str) -> dict[str, Any]:
+        """Retrieve daily/zone burner active running times from minder.tado.com."""
+        params = {
+            "from": from_date,
+            "to": to_date,
+            "aggregate": "day",
+            "summary_only": "false",
+        }
+        primary = f"{TADO_MINDER_API_URL}/homes/{home_id}/runningTimes"
+        fallback = f"{TADO_MINDER_FALLBACK_URL}/homes/{home_id}/runningTimes"
+        res = await self._microservice_request("GET", primary, fallback_url=fallback, params=params)
+        return res if isinstance(res, dict) else {}
+
+    async def get_energy_insights(self, home_id: int, year_month: str) -> dict[str, Any]:
+        """Fetch unified energy savings, heat pump COP and notifications in one GraphQL call."""
+        query = """
+        query EnergyInsights($homeId: ID!, $month: YearMonth!) {
+          home(id: $homeId) {
+            energySavings(month: $month) {
+              totalSavings {
+                percentage
+              }
+              openWindowDetectionTimes
+              sunshineDuration {
+                duration
+              }
+              awayDuration {
+                duration
+              }
+              manualControlSaving {
+                percentage
+              }
+              hasAutoAssist
+            }
+            heatPump {
+              consumption {
+                cop {
+                  heating
+                  domesticHotWater
+                }
+              }
+            }
+            notifications(types: [MOLD_INDEX, OPEN_WINDOW_DETECTION_SAVINGS_ADVICE]) {
+              id
+              type
+              ... on MoldIndexNotification {
+                roomIds
+                moldIndexNotificationType
+              }
+            }
+          }
+        }
+        """
+        data = await self.async_graphql(query, variables={"homeId": str(home_id), "month": str(year_month)})
+        return (data.get("home") or {}) if isinstance(data, dict) else {}
+
+    async def get_hops_diagnostics(self, home_id: int) -> list[dict[str, Any]]:
+        """Retrieve actionable device alerts from hops.tado.com."""
+        primary = f"{TADO_HOPS_API_URL}/homes/{home_id}/actionableDevices"
+        fallback = f"{TADO_HOPS_FALLBACK_URL}/homes/{home_id}/actionableDevices"
+        res = await self._microservice_request("GET", primary, fallback_url=fallback)
+        if isinstance(res, list):
+            return res
+        if isinstance(res, dict):
+            return res.get("actionableDevices") or res.get("devices") or []
+        return []
+
+    async def get_matter_provisioning(self, home_id: int, device_id: str) -> dict[str, Any]:
+        """Retrieve secret Matter pairing codes (passcode & discriminator) for a Tado X device."""
+        query = """
+        query MatterProvisioningData($homeId: ID!, $deviceId: ID!) {
+          home(id: $homeId) {
+            device(id: $deviceId) {
+              ... on MatterCommissionable {
+                matterProvisioningData {
+                  passcode
+                  discriminator
+                }
+              }
+            }
+          }
+        }
+        """
+        data = await self.async_graphql(query, variables={"homeId": str(home_id), "deviceId": str(device_id)})
+        return (data.get("home", {}).get("device", {}).get("matterProvisioningData") or {}) if isinstance(data, dict) else {}

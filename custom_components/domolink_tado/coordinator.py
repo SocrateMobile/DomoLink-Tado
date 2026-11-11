@@ -37,6 +37,9 @@ from .const import (
     CONF_VALVE_CALIBRATION_MODES,
     CONF_ZONE_HUMIDITY_ENTITIES,
     CONF_ZONE_TEMP_ENTITIES,
+    CONF_ZONE_CONTACT_ENTITIES,
+    CONF_ENABLE_LOCAL_PRIORITY,
+    CONF_LOCAL_HOMEKIT_PIN,
     CALIBRATION_MODE_AUTO,
     CALIBRATION_MODE_MANUAL,
     DEFAULT_AUTO_GEOFENCING_ENABLED,
@@ -45,6 +48,7 @@ from .const import (
     DEFAULT_AUTO_WINDOW_ENABLED,
     DEFAULT_DYNAMIC_WINDOW_DROP,
     DEFAULT_ECO_TEMP,
+    DEFAULT_ENABLE_LOCAL_PRIORITY,
     DEFAULT_GEOFENCING_PERSONS,
     DEFAULT_HEATING_RATE,
     DEFAULT_OVERLAY_MODE,
@@ -76,6 +80,7 @@ from .physics import (
     calculate_ventilation_recommended,
 )
 from .tado_api import TadoAuthError, TadoClient, TadoError, TadoRateLimitError
+from .local_bridge import LocalBridgeManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -101,6 +106,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.client = client
         self.home_id = home_id
         self.home_name = home_name
+        self.local_bridge = LocalBridgeManager(hass, self)
         self._zones_raw: list[dict[str, Any]] = []
         self._devices_raw: list[dict[str, Any]] = []
         self._last_discovery_time: float = 0.0
@@ -108,6 +114,13 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_weather_time: float = 0.0
         self._home_state_raw: dict[str, Any] = {}
         self._last_home_state_time: float = 0.0
+        self._graphql_devices_cache: dict[str, Any] = {}
+        self._graphql_devices_last_update: float = 0.0
+        self._minder_cache: dict[str, Any] = {}
+        self._minder_last_update: float = 0.0
+        self._energy_insights_cache: dict[str, Any] = {}
+        self._energy_insights_last_update: float = 0.0
+        self._boiler_system_details: dict[str, Any] = {}
         self._open_window_handled: dict[int, bool] = {}
         self._open_window_pending: set[int] = set()
         self._zone_temp_history: dict[int, list[tuple[float, float]]] = {}
@@ -118,6 +131,33 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._preheat_triggered: dict[int, bool] = {}
         self._last_offset_update_time: dict[str, float] = {}
         self._consecutive_failures: int = 0
+        self._delayed_verification_task: asyncio.Task[Any] | None = None
+        self.window_guard: Any = None
+
+    def _schedule_coalesced_verification(self, delay: float = 45.0) -> None:
+        """Schedule a coalesced delayed verification refresh to avoid duplicate API calls."""
+        budget = getattr(self.client, "budget", None)
+        if budget and not budget.can_spend("poll"):
+            _LOGGER.debug("DomoLink-Tado: Vérification différée ignorée pour préserver le quota")
+            return
+
+        if self._delayed_verification_task and not self._delayed_verification_task.done():
+            self._delayed_verification_task.cancel()
+
+        async def _delayed_check() -> None:
+            await asyncio.sleep(delay)
+            try:
+                _LOGGER.debug("DomoLink-Tado: Exécution de la vérification différée post-commande")
+                await self.async_request_refresh()
+            except Exception as err:
+                _LOGGER.debug("DomoLink-Tado: Erreur lors de la vérification différée: %s", err)
+
+        if hasattr(self.hass, "async_create_task"):
+            coro = _delayed_check()
+            task = self.hass.async_create_task(coro)
+            if not isinstance(task, asyncio.Task) and hasattr(coro, "close"):
+                coro.close()
+            self._delayed_verification_task = task
 
     @property
     def formatted_home_name(self) -> str:
@@ -204,38 +244,42 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     f"Quota Tado temporairement indisponible (disjoncteur actif pour encore {int(remaining_cooldown)}s). En attente de renouvellement du quota."
                 )
 
-            # Gestion éco-quota multi-niveaux basée sur le quota restant Tado (plafond 1000 req/jour)
+            # Gestion éco-quota multi-niveaux basée sur le budget centralisé Tado (QuotaBudget)
+            from .quota_budget import QuotaBudget, QuotaSnapshot
+            raw_budget = getattr(self.client, "budget", None)
+            budget = raw_budget if isinstance(raw_budget, QuotaBudget) else None
             rate_limit_rem = getattr(self.client, "rate_limit_remaining", None)
             is_valid_rem = isinstance(rate_limit_rem, (int, float))
 
-            critical_quota = is_valid_rem and rate_limit_rem < 100
-            moderate_quota = is_valid_rem and rate_limit_rem < 300
-            low_quota = critical_quota
+            # Synchroniser le snapshot du budget avec les attributs du client si nécessaire
+            if budget and is_valid_rem and (not budget.snapshot or budget.snapshot.remaining != rate_limit_rem):
+                budget.update(
+                    QuotaSnapshot(
+                        limit=getattr(self.client, "rate_limit_limit", None),
+                        remaining=int(rate_limit_rem),
+                        reset_in=getattr(self.client, "rate_limit_reset_seconds", None),
+                        observed_at=now,
+                    )
+                )
 
-            # TTL Découverte (zones & équipements physiques : quasiment statiques)
-            # 4 heures par défaut (14400s), 8h si modéré, 24h si critique
-            if critical_quota:
-                discovery_cache_ttl = 86400
-            elif moderate_quota:
-                discovery_cache_ttl = 28800
-            else:
-                discovery_cache_ttl = 14400
+            has_ext_weather = bool(self.entry.options.get(CONF_OUTDOOR_WEATHER_ENTITY))
+            has_ext_geofence = bool(
+                self.entry.options.get(CONF_AUTO_GEOFENCING_ENABLED)
+                and self.entry.options.get(CONF_GEOFENCING_PERSONS)
+            )
 
-            # TTL Météo (30 minutes par défaut, 1h si modéré, 2h si critique)
-            if critical_quota:
-                weather_cache_ttl = 7200
-            elif moderate_quota:
-                weather_cache_ttl = 3600
+            if budget and budget.tier != "UNKNOWN":
+                discovery_cache_ttl = budget.ttl("discovery") or 14400
+                weather_cache_ttl = budget.ttl("weather", has_ha_weather=has_ext_weather)
+                home_state_cache_ttl = budget.ttl("home_state", has_ha_geofencing=has_ext_geofence)
+                low_quota = not budget.can_spend("background")
             else:
-                weather_cache_ttl = 1800
-
-            # TTL Présence Domicile (15 minutes par défaut, 30 min si modéré, 1h si critique)
-            if critical_quota:
-                home_state_cache_ttl = 3600
-            elif moderate_quota:
-                home_state_cache_ttl = 1800
-            else:
-                home_state_cache_ttl = 900
+                critical_quota = is_valid_rem and rate_limit_rem < 100
+                moderate_quota = is_valid_rem and rate_limit_rem < 300
+                low_quota = critical_quota
+                discovery_cache_ttl = 86400 if critical_quota else (28800 if moderate_quota else 14400)
+                weather_cache_ttl = 7200 if critical_quota else (3600 if moderate_quota else 1800)
+                home_state_cache_ttl = 3600 if critical_quota else (1800 if moderate_quota else 900)
 
             # 1. Cache zones et matériel pour préserver le quota journalier Tado
             if not self._zones_raw or not self._devices_raw or (now - self._last_discovery_time > discovery_cache_ttl):
@@ -267,31 +311,173 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             states_res = await self.client.get_zone_states(self.home_id)
             zone_states = (states_res or {}).get("zoneStates", {})
 
-            # 3. Météo mise en cache pendant 15 minutes (900s) ou 60 minutes si low_quota
-            if not self._weather_raw or (now - self._last_weather_time > weather_cache_ttl):
+            # 3. Météo mise en cache selon budget (désactivée si entité météo HA présente en Free tier)
+            if weather_cache_ttl is not None and (
+                not self._weather_raw or (now - self._last_weather_time > weather_cache_ttl)
+            ):
                 try:
                     self._weather_raw = await self.client.get_weather(self.home_id) or {}
                     self._last_weather_time = now
                 except Exception as err:
                     _LOGGER.debug("DomoLink-Tado: Échec rafraîchissement météo: %s", err)
 
-            # 4. État du domicile (présence) mis en cache pendant 5 minutes (300s) ou 30 minutes si low_quota
-            if not self._home_state_raw or (now - self._last_home_state_time > home_state_cache_ttl):
+            # 4. État du domicile (présence) mis en cache selon budget
+            if home_state_cache_ttl is not None and (
+                not self._home_state_raw or (now - self._last_home_state_time > home_state_cache_ttl)
+            ):
                 try:
                     self._home_state_raw = await self.client.get_home_state(self.home_id) or {}
                     self._last_home_state_time = now
                 except Exception as err:
                     _LOGGER.debug("DomoLink-Tado: Échec rafraîchissement présence: %s", err)
 
+            # 5. Microservice GraphQL Matériel (ext.api.tado.com/apps/graphql) mis en cache selon budget
+            gql_dev_ttl = budget.ttl("graphql_devices") if budget else 21600
+            if gql_dev_ttl is not None and (now - self._graphql_devices_last_update > gql_dev_ttl):
+                if not budget or budget.can_spend("background"):
+                    try:
+                        gql_devs = await self.client.get_graphql_devices(self.home_id)
+                        if gql_devs:
+                            self._graphql_devices_cache = {
+                                d.get("serialNumber"): d for d in gql_devs if d.get("serialNumber")
+                            }
+                            self._graphql_devices_last_update = now
+                    except Exception as err:
+                        _LOGGER.debug("DomoLink-Tado: Échec rafraîchissement GraphQL devices: %s", err)
+
+            # 6. Microservice Boiler Care (minder.tado.com & ivar.tado.com) mis en cache selon budget
+            minder_ttl = budget.ttl("minder") if budget else 21600
+            if minder_ttl is not None and (now - self._minder_last_update > minder_ttl):
+                if not budget or budget.can_spend("background"):
+                    try:
+                        today_str = datetime.now().strftime("%Y-%m-%d")
+                        incidents_res = await self.client.get_boiler_incidents(self.home_id)
+                        rtimes_res = await self.client.get_burner_running_times(self.home_id, today_str, today_str)
+                        hsys_res = await self.client.get_heating_system(self.home_id)
+
+                        incidents_list = incidents_res if isinstance(incidents_res, list) else []
+                        rtimes_dict = rtimes_res if isinstance(rtimes_res, dict) else {}
+                        hsys_dict = hsys_res if isinstance(hsys_res, dict) else {}
+
+                        boiler_info = hsys_dict.get("boiler") or {}
+                        boiler_present = bool(boiler_info.get("present") or boiler_info.get("found"))
+                        boiler_id = boiler_info.get("id")
+
+                        boiler_model = ""
+                        if boiler_id and not self._boiler_system_details:
+                            try:
+                                ivar_sys = await self.client.get_ivar_boiler_details(int(boiler_id))
+                                if ivar_sys:
+                                    self._boiler_system_details = ivar_sys
+                            except Exception:
+                                pass
+
+                        if self._boiler_system_details:
+                            mfg_list = self._boiler_system_details.get("manufacturers") or []
+                            mfg_name = mfg_list[0].get("name", "") if mfg_list else ""
+                            model_name = self._boiler_system_details.get("modelName", "")
+                            boiler_model = f"{mfg_name} {model_name}".strip()
+
+                        daily_seconds = 0
+                        summary = rtimes_dict.get("summary") or {}
+                        if isinstance(summary, dict) and "duration" in summary:
+                            daily_seconds = int(summary.get("duration") or 0)
+                        elif "runningTimes" in rtimes_dict and isinstance(rtimes_dict["runningTimes"], list):
+                            for rt in rtimes_dict["runningTimes"]:
+                                dur = rt.get("duration")
+                                if dur:
+                                    daily_seconds += int(dur)
+
+                        self._minder_cache = {
+                            "boiler_present": boiler_present,
+                            "boiler_id": boiler_id,
+                            "boiler_model": boiler_model,
+                            "incidents": incidents_list,
+                            "has_active_incident": len(incidents_list) > 0,
+                            "daily_running_seconds": daily_seconds,
+                            "daily_running_hours": round(daily_seconds / 3600.0, 2),
+                        }
+                        self._minder_last_update = now
+                    except Exception as err:
+                        _LOGGER.debug("DomoLink-Tado: Échec rafraîchissement Boiler Care: %s", err)
+
+            # 7. Microservice Energy Insights & Hops (ext.api.tado.com & hops.tado.com)
+            insights_ttl = budget.ttl("energy_insights") if budget else 43200
+            if insights_ttl is not None and (now - self._energy_insights_last_update > insights_ttl):
+                if not budget or budget.can_spend("background"):
+                    try:
+                        cur_month = datetime.now().strftime("%Y-%m")
+                        insights_res = await self.client.get_energy_insights(self.home_id, cur_month)
+                        hops_res = await self.client.get_hops_diagnostics(self.home_id)
+
+                        insights = insights_res if isinstance(insights_res, dict) else {}
+                        hops_list = hops_res if isinstance(hops_res, list) else []
+
+                        es = insights.get("energySavings") or {}
+                        total_savings = es.get("totalSavings", {}).get("percentage", 0.0) if isinstance(es, dict) else 0.0
+                        window_times = es.get("openWindowDetectionTimes", 0) if isinstance(es, dict) else 0
+                        sunshine_dur = (es.get("sunshineDuration") or {}).get("duration", 0.0) if isinstance(es, dict) else 0.0
+                        away_dur = (es.get("awayDuration") or {}).get("duration", 0.0) if isinstance(es, dict) else 0.0
+                        manual_saving = (es.get("manualControlSaving") or {}).get("percentage", 0.0) if isinstance(es, dict) else 0.0
+
+                        hp = insights.get("heatPump") or {}
+                        cop_data = (hp.get("consumption") or {}).get("cop") or {}
+                        cop_heating = cop_data.get("heating")
+                        cop_dhw = cop_data.get("domesticHotWater")
+
+                        notifications = insights.get("notifications") or []
+                        mold_rooms: list[int] = []
+                        for n in notifications:
+                            if isinstance(n, dict) and n.get("type") == "MOLD_INDEX":
+                                r_ids = n.get("roomIds") or []
+                                mold_rooms.extend([int(r) for r in r_ids if str(r).isdigit()])
+
+                        self._energy_insights_cache = {
+                            "total_savings_percentage": float(total_savings) if total_savings is not None else 0.0,
+                            "open_window_detections": int(window_times) if window_times is not None else 0,
+                            "sunshine_duration_hours": round(float(sunshine_dur) / 3600.0, 1) if float(sunshine_dur) > 100 else float(sunshine_dur),
+                            "away_duration_hours": round(float(away_dur) / 3600.0, 1) if float(away_dur) > 100 else float(away_dur),
+                            "manual_control_saving": float(manual_saving) if manual_saving is not None else 0.0,
+                            "cop_heating": float(cop_heating) if cop_heating is not None else None,
+                            "cop_dhw": float(cop_dhw) if cop_dhw is not None else None,
+                            "mold_risk_room_ids": list(set(mold_rooms)),
+                            "actionable_devices": hops_list,
+                        }
+                        self._energy_insights_last_update = now
+                    except Exception as err:
+                        _LOGGER.debug("DomoLink-Tado: Échec rafraîchissement Energy Insights: %s", err)
+
             devices = self._devices_raw if isinstance(self._devices_raw, list) else []
             weather = self._weather_raw if isinstance(self._weather_raw, dict) else {}
             outdoor_temp, outdoor_humidity = self._get_outdoor_conditions()
             home_state = self._home_state_raw if isinstance(self._home_state_raw, dict) else {}
 
-            # Map devices by zone and serial number
-            devices_by_serial: dict[str, dict[str, Any]] = {
-                dev.get("serialNo", ""): dev for dev in devices if dev.get("serialNo")
-            }
+            # Map devices by zone and serial number and enrich with GraphQL attributes
+            devices_by_serial: dict[str, dict[str, Any]] = {}
+            for dev in devices:
+                serial = dev.get("serialNo")
+                if not serial:
+                    continue
+                d_copy = dict(dev)
+                if serial in self._graphql_devices_cache:
+                    gql_info = self._graphql_devices_cache[serial]
+                    d_copy["graphql_id"] = gql_info.get("id")
+                    if "dazzleEnabled" in gql_info:
+                        d_copy["dazzleEnabled"] = gql_info.get("dazzleEnabled")
+                    if "supportsIdentify" in gql_info:
+                        d_copy["supportsIdentify"] = gql_info.get("supportsIdentify")
+                    if "hasBadSignal" in gql_info:
+                        d_copy["hasBadSignal"] = gql_info.get("hasBadSignal")
+                    if "controlMode" in gql_info:
+                        d_copy["controlMode"] = gql_info.get("controlMode")
+                    if "relayMode" in gql_info:
+                        d_copy["relayMode"] = gql_info.get("relayMode")
+                    if "thermInterfaceType" in gql_info:
+                        d_copy["thermInterfaceType"] = gql_info.get("thermInterfaceType")
+                devices_by_serial[serial] = d_copy
+
+            # Découverte des entités locales HomeKit / Matter (Local Bridge Bypass)
+            self.local_bridge.discover_local_entities()
 
             # Structure data per zone
             zones_data: dict[int, dict[str, Any]] = {}
@@ -510,22 +696,25 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             self._zone_temp_history[zid], threshold_drop=0.5, max_seconds=300.0
                         )
 
-                # Coupure automatique de sécurité si fenêtre ouverte (Tado natif ou Chute brutale locale)
-                window_cutoff_condition = open_window or (dynamic_window and rapid_drop and heating_power > 0)
-                if (
-                    auto_window
-                    and window_cutoff_condition
-                    and not self._open_window_handled.get(zid, False)
-                    and zid not in self._open_window_pending
-                ):
-                    self._open_window_pending.add(zid)
-                    self.hass.async_create_task(
-                        self._async_handle_open_window(
-                            zid, z.get("name", f"Zone {zid}"), window_duration
+                # Coupure automatique de sécurité si fenêtre ouverte (WindowGuard ou repli direct)
+                if self.window_guard:
+                    self.window_guard.on_tado_native_detected(zid, open_window)
+                else:
+                    window_cutoff_condition = open_window or (dynamic_window and rapid_drop and heating_power > 0)
+                    if (
+                        auto_window
+                        and window_cutoff_condition
+                        and not self._open_window_handled.get(zid, False)
+                        and zid not in self._open_window_pending
+                    ):
+                        self._open_window_pending.add(zid)
+                        self.hass.async_create_task(
+                            self._async_handle_open_window(
+                                zid, z.get("name", f"Zone {zid}"), window_duration
+                            )
                         )
-                    )
-                elif not open_window and not (dynamic_window and rapid_drop):
-                    self._open_window_handled[zid] = False
+                    elif not open_window and not (dynamic_window and rapid_drop):
+                        self._open_window_handled[zid] = False
 
                 # Apprentissage automatique de la vitesse de chauffe réelle (°C/h) par EMA
                 current_rate = self._zone_heating_rates.get(zid, DEFAULT_HEATING_RATE)
@@ -673,28 +862,35 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "labels": room_labels,
                 }
 
-            # Polling adaptatif intelligent pour respecter le quota journalier Tado (1000 req/jour max)
-            # Important : un overlay actif (consigne manuelle) ne doit PAS forcer un polling à haute fréquence (60s)
-            # car une consigne manuelle peut durer plusieurs heures voire des jours entiers.
+            # Polling adaptatif intelligent calculé par QuotaBudget
             adaptive = self.entry.options.get(CONF_ADAPTIVE_POLLING, True)
-            if is_valid_rem and rate_limit_rem < 50:
+            now_hour = datetime.now().hour
+            is_quiet = now_hour >= 23 or now_hour < 6
+
+            if budget and adaptive and budget.tier != "UNKNOWN":
+                new_interval = budget.poll_interval(
+                    now,
+                    heating_active=(active_heating_count > 0),
+                    quiet_hours=is_quiet,
+                )
+            elif is_valid_rem and rate_limit_rem < 50:
                 new_interval = 900  # 15 minutes (urgence critique)
             elif is_valid_rem and rate_limit_rem < 150:
                 new_interval = 600  # 10 minutes (alerte quota bas)
             elif is_valid_rem and rate_limit_rem < 300:
                 new_interval = 300  # 5 minutes (préservation quota)
             elif adaptive:
-                # Chauffe active : 120s (2 min) réactif et respectueux du quota. Repos : 300s (5 min).
                 new_interval = 120 if active_heating_count > 0 else 300
             else:
                 new_interval = 300
 
             if self.update_interval != timedelta(seconds=new_interval):
                 _LOGGER.debug(
-                    "DomoLink-Tado: Ajustement intervalle de polling à %ds (chauffe=%d, quota_restant=%s)",
+                    "DomoLink-Tado: Ajustement intervalle de polling à %ds (chauffe=%d, quota_restant=%s, tier=%s)",
                     new_interval,
                     active_heating_count,
                     rate_limit_rem,
+                    getattr(budget, "tier", "UNKNOWN"),
                 )
                 self.update_interval = timedelta(seconds=new_interval)
 
@@ -728,6 +924,10 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "active_heating_zones": active_heating_count,
                 "total_heating_power": total_heating_power,
                 "rate_limit": self.client.rate_limit_info,
+                "boiler_care": self._minder_cache,
+                "energy_insights": self._energy_insights_cache,
+                "local_bridge_active": self.local_bridge.has_local_entities,
+                "local_bridge_zones": dict(self.local_bridge._zone_to_local_entity),
                 "last_update": datetime.now().isoformat(),
             }
 
@@ -811,6 +1011,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         try:
             await coro
+            self._schedule_coalesced_verification()
         except Exception as err:
             # M-4: Ne restaurer le backup QUE si self.data n'a pas été remplacé par un rafraîchissement d'arrière-plan
             if has_zone and backup_state is not None:
@@ -871,6 +1072,8 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Rafraîchir les données en cas de rollback partiel
         if failed_zones and self.data is original_data:
             self.async_set_updated_data(self.data)
+        elif not failed_zones:
+            self._schedule_coalesced_verification()
 
     async def async_set_temperature(
         self,
@@ -902,6 +1105,23 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     rounded_temp,
                 )
                 return
+
+        # Priorité au Pont Local LAN (HomeKit/Matter) si disponible (0 requête Cloud)
+        enable_local = bool(getattr(self, "entry", None) and getattr(self.entry, "options", {}).get(CONF_ENABLE_LOCAL_PRIORITY, DEFAULT_ENABLE_LOCAL_PRIORITY))
+        if enable_local and hasattr(self, "local_bridge") and hasattr(self.local_bridge, "get_local_entity_for_zone"):
+            local_ent = self.local_bridge.get_local_entity_for_zone(zone_id)
+            if local_ent and isinstance(local_ent, str):
+                local_ok = await self.local_bridge.async_set_temperature_local(zone_id, rounded_temp)
+                if local_ok:
+                    patch = {
+                        "target_temperature": rounded_temp,
+                        "power": "ON",
+                        "is_overlay_active": True,
+                    }
+                    if self.data and zone_id in self.data.get("zones", {}):
+                        self.data["zones"][zone_id].update(patch)
+                        self.async_set_updated_data(self.data)
+                    return
 
         patch = {
             "target_temperature": rounded_temp,
@@ -974,6 +1194,22 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 zone_id,
             )
             return
+
+        # Priorité au Pont Local LAN (HomeKit/Matter) si disponible (0 requête Cloud)
+        enable_local = bool(getattr(self, "entry", None) and getattr(self.entry, "options", {}).get(CONF_ENABLE_LOCAL_PRIORITY, DEFAULT_ENABLE_LOCAL_PRIORITY))
+        if enable_local and hasattr(self, "local_bridge") and hasattr(self.local_bridge, "get_local_entity_for_zone"):
+            local_ent = self.local_bridge.get_local_entity_for_zone(zone_id)
+            if local_ent and isinstance(local_ent, str):
+                local_ok = await self.local_bridge.async_turn_off_local(zone_id)
+                if local_ok:
+                    patch = {
+                        "power": "OFF",
+                        "is_overlay_active": True,
+                    }
+                    if self.data and zone_id in self.data.get("zones", {}):
+                        self.data["zones"][zone_id].update(patch)
+                        self.async_set_updated_data(self.data)
+                    return
 
         patch = {
             "power": "OFF",
@@ -1306,6 +1542,15 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.hass.config_entries.async_update_entry(self.entry, options=current_options)
         await self._safe_request_refresh()
 
+    async def async_save_window_contacts(self, contacts_dict: dict[str, Any]) -> None:
+        """Save room window contact sensors to config entry options."""
+        current_options = dict(self.entry.options)
+        current_options[CONF_ZONE_CONTACT_ENTITIES] = contacts_dict
+        self.hass.config_entries.async_update_entry(self.entry, options=current_options)
+        if self.window_guard:
+            self.window_guard._setup_sensor_subscriptions()
+        await self._safe_request_refresh()
+
     async def async_set_valve_calibration_mode(self, device_serial: str, mode: str) -> None:
         """Set calibration mode (AUTO or MANUAL) for a specific valve."""
         current_options = dict(self.entry.options)
@@ -1353,4 +1598,48 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                                 )
                             break
         await self._safe_request_refresh()
+
+    def _resolve_graphql_device_id(self, serial_or_id: str) -> str:
+        """Resolve a device serial number or ID to GraphQL internal deviceId."""
+        devs = (self.data or {}).get("devices", {})
+        if serial_or_id in devs and devs[serial_or_id].get("graphql_id"):
+            return str(devs[serial_or_id]["graphql_id"])
+        if serial_or_id in self._graphql_devices_cache and self._graphql_devices_cache[serial_or_id].get("id"):
+            return str(self._graphql_devices_cache[serial_or_id]["id"])
+        return str(serial_or_id)
+
+    async def async_identify_device(self, serial_or_id: str) -> dict[str, Any]:
+        """Blink device screen to locate it physically."""
+        dev_id = self._resolve_graphql_device_id(serial_or_id)
+        budget = getattr(self.client, "budget", None)
+        if budget and not budget.can_spend("command"):
+            _LOGGER.warning("DomoLink-Tado: Quota épuisé pour identifier l'appareil %s", serial_or_id)
+            return {"success": False, "failureReason": "QUOTA_EXHAUSTED"}
+        return await self.client.identify_device(dev_id)
+
+    async def async_reboot_device(self, serial_or_id: str) -> dict[str, Any]:
+        """Remotely reboot a physical Tado device."""
+        dev_id = self._resolve_graphql_device_id(serial_or_id)
+        budget = getattr(self.client, "budget", None)
+        if budget and not budget.can_spend("command"):
+            _LOGGER.warning("DomoLink-Tado: Quota épuisé pour redémarrer l'appareil %s", serial_or_id)
+            return {"success": False, "failureReason": "QUOTA_EXHAUSTED"}
+        return await self.client.reboot_device(dev_id)
+
+    async def async_set_device_dazzle(self, serial_or_id: str, enabled: bool) -> dict[str, Any]:
+        """Toggle inverted / high brightness display mode on a valve."""
+        dev_id = self._resolve_graphql_device_id(serial_or_id)
+        res = await self.client.set_device_dazzle(dev_id, enabled)
+        # Immediate local cache update
+        if serial_or_id in self._graphql_devices_cache:
+            self._graphql_devices_cache[serial_or_id]["dazzleEnabled"] = enabled
+        if self.data and "devices" in self.data and serial_or_id in self.data["devices"]:
+            self.data["devices"][serial_or_id]["dazzleEnabled"] = enabled
+            self.async_set_updated_data(self.data)
+        return res
+
+    async def async_pair_local_bridge(self, pin: str) -> dict[str, Any]:
+        """Pair Tado Internet Bridge via HomeKit Controller locally."""
+        return await self.local_bridge.async_pair_homekit_bridge(pin)
+
 

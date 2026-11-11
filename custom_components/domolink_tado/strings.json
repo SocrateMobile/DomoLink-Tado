@@ -57,6 +57,10 @@
           "overlay_duration": "Durée de la minuterie manuelle (secondes)",
           "auto_window_enabled": "Détection fenêtre ouverte : coupure automatique du radiateur",
           "auto_window_duration": "Durée de coupure lors d'une fenêtre ouverte (secondes)",
+          "window_open_delay": "Délai avant coupure à l'ouverture de fenêtre (secondes)",
+          "window_close_delay": "Délai avant rétablissement après fermeture (secondes)",
+          "window_max_duration": "Durée maximale de la coupure de sécurité fenêtre (secondes)",
+          "window_restore_mode": "Mode de rétablissement après fermeture de fenêtre",
           "dynamic_window_drop": "Détection dynamique rapide de chute thermique (fenêtre)",
           "preheat_enabled": "Préchauffage adaptatif local (remplacement Auto-Assist)",
           "preheat_mode": "Mode de préchauffage (Conseiller ou Autonome)",
@@ -67,7 +71,9 @@
           "auto_geofencing_enabled": "Géolocalisation automatisée (Contournement Auto-Assist payant)",
           "geofencing_persons": "Entités personnes/trackers à surveiller (ex: person.jean, person.marie ou vide pour zone.home)",
           "smart_boost_temp": "Température du Boost Intelligent (°C)",
-          "smart_boost_duration": "Durée du Boost Intelligent (secondes)"
+          "smart_boost_duration": "Durée du Boost Intelligent (secondes)",
+          "enable_local_priority": "Priorité au Pont Local LAN (HomeKit/Matter) pour consigne et coupure (0 appel Cloud)",
+          "local_homekit_pin": "Code PIN HomeKit du pont Tado (ex: 123-45-678 sous le boîtier pour appairage automatique)"
         }
       },
       "external_sensors": {

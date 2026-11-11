@@ -39,6 +39,19 @@ from .const import (
     CONF_SMART_BOOST_TEMP,
     CONF_ZONE_HUMIDITY_ENTITIES,
     CONF_ZONE_TEMP_ENTITIES,
+    CONF_ZONE_CONTACT_ENTITIES,
+    CONF_ENABLE_LOCAL_PRIORITY,
+    CONF_LOCAL_HOMEKIT_PIN,
+    CONF_WINDOW_OPEN_DELAY,
+    CONF_WINDOW_CLOSE_DELAY,
+    CONF_WINDOW_MAX_DURATION,
+    CONF_WINDOW_RESTORE_MODE,
+    DEFAULT_WINDOW_OPEN_DELAY,
+    DEFAULT_WINDOW_CLOSE_DELAY,
+    DEFAULT_WINDOW_MAX_DURATION,
+    DEFAULT_WINDOW_RESTORE_MODE,
+    WINDOW_RESTORE_RESUME,
+    WINDOW_RESTORE_PREVIOUS,
     DEFAULT_ADAPTIVE_POLLING,
     DEFAULT_AUTO_GEOFENCING_ENABLED,
     DEFAULT_AUTO_OFFSET_CALIBRATION,
@@ -46,6 +59,7 @@ from .const import (
     DEFAULT_AUTO_WINDOW_ENABLED,
     DEFAULT_DYNAMIC_WINDOW_DROP,
     DEFAULT_ECO_TEMP,
+    DEFAULT_ENABLE_LOCAL_PRIORITY,
     DEFAULT_GEOFENCING_PERSONS,
     DEFAULT_OVERLAY_DURATION,
     DEFAULT_OVERLAY_MODE,
@@ -505,6 +519,14 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
                 if k not in ("reauth_trigger", "external_sensors_trigger")
             }
             current_options.update(clean_input)
+
+            # Si un code PIN HomeKit est saisi, lancer l'association locale automatique
+            pin_input = user_input.get(CONF_LOCAL_HOMEKIT_PIN)
+            if pin_input and str(pin_input).strip():
+                coord = self.hass.data.get(DOMAIN, {}).get(self.config_entry.entry_id, {}).get("coordinator")
+                if coord:
+                    self.hass.async_create_task(coord.async_pair_local_bridge(str(pin_input).strip()))
+
             return self.async_create_entry(title="", data=current_options)
 
         return self.async_show_form(
@@ -553,6 +575,35 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
                             CONF_AUTO_WINDOW_DURATION, DEFAULT_AUTO_WINDOW_DURATION
                         ),
                     ): vol.All(vol.Coerce(int), vol.Range(min=300, max=7200)),
+                    vol.Optional(
+                        CONF_WINDOW_OPEN_DELAY,
+                        default=self.config_entry.options.get(
+                            CONF_WINDOW_OPEN_DELAY, DEFAULT_WINDOW_OPEN_DELAY
+                        ),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=600)),
+                    vol.Optional(
+                        CONF_WINDOW_CLOSE_DELAY,
+                        default=self.config_entry.options.get(
+                            CONF_WINDOW_CLOSE_DELAY, DEFAULT_WINDOW_CLOSE_DELAY
+                        ),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=600)),
+                    vol.Optional(
+                        CONF_WINDOW_MAX_DURATION,
+                        default=self.config_entry.options.get(
+                            CONF_WINDOW_MAX_DURATION, DEFAULT_WINDOW_MAX_DURATION
+                        ),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=300, max=7200)),
+                    vol.Optional(
+                        CONF_WINDOW_RESTORE_MODE,
+                        default=self.config_entry.options.get(
+                            CONF_WINDOW_RESTORE_MODE, DEFAULT_WINDOW_RESTORE_MODE
+                        ),
+                    ): vol.In(
+                        {
+                            WINDOW_RESTORE_RESUME: "Reprendre le planning automatique",
+                            WINDOW_RESTORE_PREVIOUS: "Rétablir la consigne précédente",
+                        }
+                    ),
                     vol.Optional(
                         CONF_DYNAMIC_WINDOW_DROP,
                         default=self.config_entry.options.get(
@@ -624,6 +675,18 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
                             CONF_SMART_BOOST_DURATION, DEFAULT_SMART_BOOST_DURATION
                         ),
                     ): vol.All(vol.Coerce(int), vol.Range(min=300, max=7200)),
+                    vol.Optional(
+                        CONF_ENABLE_LOCAL_PRIORITY,
+                        default=self.config_entry.options.get(
+                            CONF_ENABLE_LOCAL_PRIORITY, DEFAULT_ENABLE_LOCAL_PRIORITY
+                        ),
+                    ): bool,
+                    vol.Optional(
+                        CONF_LOCAL_HOMEKIT_PIN,
+                        default=self.config_entry.options.get(
+                            CONF_LOCAL_HOMEKIT_PIN, ""
+                        ),
+                    ): str,
                 }
             ),
         )
@@ -698,10 +761,12 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
         zones = coordinator.data.get("zones", {}) if (coordinator and coordinator.data) else {}
         cur_temp_map = dict(self.config_entry.options.get(CONF_ZONE_TEMP_ENTITIES, {}))
         cur_hum_map = dict(self.config_entry.options.get(CONF_ZONE_HUMIDITY_ENTITIES, {}))
+        cur_contact_map = dict(self.config_entry.options.get(CONF_ZONE_CONTACT_ENTITIES, {}))
 
         if user_input is not None:
             new_temp_map = dict(cur_temp_map)
             new_hum_map = dict(cur_hum_map)
+            new_contact_map = dict(cur_contact_map)
             for zid in zones:
                 t_val = str(user_input.get(f"temp_zone_{zid}", "")).strip()
                 if t_val:
@@ -717,9 +782,17 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
                 elif str(zid) in new_hum_map:
                     del new_hum_map[str(zid)]
 
+                c_val = str(user_input.get(f"contact_zone_{zid}", "")).strip()
+                if c_val:
+                    c_items = [x.strip() for x in c_val.split(",") if x.strip()]
+                    new_contact_map[str(zid)] = c_items if len(c_items) > 1 else c_items[0]
+                elif str(zid) in new_contact_map:
+                    del new_contact_map[str(zid)]
+
             updated_options = dict(self.config_entry.options)
             updated_options[CONF_ZONE_TEMP_ENTITIES] = new_temp_map
             updated_options[CONF_ZONE_HUMIDITY_ENTITIES] = new_hum_map
+            updated_options[CONF_ZONE_CONTACT_ENTITIES] = new_contact_map
             return self.async_create_entry(title="", data=updated_options)
 
         def _format_entry_val(val: Any) -> str:
@@ -732,6 +805,7 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
             zname = zd.get("name", f"Zone {zid}")
             t_def = _format_entry_val(cur_temp_map.get(str(zid), ""))
             h_def = _format_entry_val(cur_hum_map.get(str(zid), ""))
+            c_def = _format_entry_val(cur_contact_map.get(str(zid), ""))
             schema_dict[
                 vol.Optional(
                     f"temp_zone_{zid}",
@@ -744,6 +818,13 @@ class DomolinkTadoOptionsFlow(config_entries.OptionsFlow):
                     f"hum_zone_{zid}",
                     default=h_def,
                     description={"suggested_value": h_def},
+                )
+            ] = str
+            schema_dict[
+                vol.Optional(
+                    f"contact_zone_{zid}",
+                    default=c_def,
+                    description={"suggested_value": c_def},
                 )
             ] = str
 

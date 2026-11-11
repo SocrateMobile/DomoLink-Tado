@@ -57,6 +57,10 @@
           "overlay_duration": "Default manual timer duration (seconds)",
           "auto_window_enabled": "Open window detection: automatically turn off heating",
           "auto_window_duration": "Window open shutoff duration (seconds)",
+          "window_open_delay": "Delay before heating cutoff on window opening (seconds)",
+          "window_close_delay": "Delay before restoring heating after window closure (seconds)",
+          "window_max_duration": "Maximum safety cutoff duration for open window (seconds)",
+          "window_restore_mode": "Restoration mode after window closure",
           "dynamic_window_drop": "Dynamic rapid thermal drop detection (window open)",
           "preheat_enabled": "Local adaptive preheating (Auto-Assist replacement)",
           "preheat_mode": "Preheating mode (Advisory or Autonomous)",
@@ -67,7 +71,9 @@
           "auto_geofencing_enabled": "Automated Geofencing Bridge (Free Auto-Assist replacement)",
           "geofencing_persons": "Person/tracker entities to track (e.g. person.john, person.mary or empty for zone.home)",
           "smart_boost_temp": "Smart Boost Temperature (°C)",
-          "smart_boost_duration": "Smart Boost Duration (seconds)"
+          "smart_boost_duration": "Smart Boost Duration (seconds)",
+          "enable_local_priority": "Priority to Local LAN Bridge (HomeKit/Matter) for setpoint & cutoff (0 Cloud calls)",
+          "local_homekit_pin": "Tado bridge HomeKit PIN (e.g. 123-45-678 under the bridge for automatic pairing)"
         }
       },
       "external_sensors": {

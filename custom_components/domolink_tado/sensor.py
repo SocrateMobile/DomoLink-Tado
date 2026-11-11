@@ -10,7 +10,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfTemperature
+from homeassistant.const import PERCENTAGE, UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -38,6 +38,9 @@ async def async_setup_entry(
         DomolinkTadoOutdoorHumiditySensor(coordinator),
         DomolinkTadoActiveHeatingZonesSensor(coordinator),
         DomolinkTadoTotalHeatingPowerSensor(coordinator),
+        DomolinkTadoBurnerRunningTimeSensor(coordinator),
+        DomolinkTadoEnergySavingsSensor(coordinator),
+        DomolinkTadoHeatPumpCopSensor(coordinator),
     ]
 
     # Capteurs de Quota API Tado (RFC RateLimit)
@@ -45,6 +48,8 @@ async def async_setup_entry(
         global_entities.append(DomolinkTadoQuotaRemainingSensor(coordinator))
         global_entities.append(DomolinkTadoQuotaLimitSensor(coordinator))
         global_entities.append(DomolinkTadoQuotaUsedSensor(coordinator))
+        global_entities.append(DomolinkTadoQuotaTierSensor(coordinator))
+        global_entities.append(DomolinkTadoQuotaResetSensor(coordinator))
 
     async_add_entities(global_entities)
 
@@ -277,6 +282,60 @@ class DomolinkTadoQuotaUsedSensor(CoordinatorEntity[DomolinkTadoCoordinator], Se
     @property
     def native_value(self) -> int | None:
         return ((self.coordinator.data or {}).get("rate_limit") or {}).get("used")
+
+
+class DomolinkTadoQuotaTierSensor(CoordinatorEntity[DomolinkTadoCoordinator], SensorEntity):
+    """Sensor tracking detected Tado API account tier (FREE, ASSIST, UNKNOWN)."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_icon = "mdi:shield-account"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_quota_tier"
+        self._attr_name = "Tado Palier Quota API"
+        self._attr_options = ["FREE", "ASSIST", "UNKNOWN"]
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
+            name=self.coordinator.formatted_home_name,
+            manufacturer="Tado (DomoLink)",
+            model="Home Hub",
+        )
+
+    @property
+    def native_value(self) -> str:
+        tier = ((self.coordinator.data or {}).get("rate_limit") or {}).get("tier")
+        return str(tier) if tier in self._attr_options else "UNKNOWN"
+
+
+class DomolinkTadoQuotaResetSensor(CoordinatorEntity[DomolinkTadoCoordinator], SensorEntity):
+    """Sensor tracking seconds until next daily Tado quota reset."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "s"
+    _attr_icon = "mdi:timer-sand"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_quota_reset_in"
+        self._attr_name = "Tado Réinitialisation Quota Dans"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
+            name=self.coordinator.formatted_home_name,
+            manufacturer="Tado (DomoLink)",
+            model="Home Hub",
+        )
+
+    @property
+    def native_value(self) -> int | None:
+        secs = ((self.coordinator.data or {}).get("rate_limit") or {}).get("seconds_to_reset")
+        return int(secs) if isinstance(secs, (int, float)) else None
 
 
 # ── Zone Sensors ────────────────────────────────────────────
@@ -522,3 +581,110 @@ class DomolinkTadoDeviceBatterySensor(CoordinatorEntity[DomolinkTadoCoordinator]
     def native_value(self) -> str:
         state = self._device_data.get("batteryState", "NORMAL")
         return "Normale" if state == "NORMAL" else "Faible"
+
+
+class DomolinkTadoBurnerRunningTimeSensor(CoordinatorEntity[DomolinkTadoCoordinator], SensorEntity):
+    """Sensor tracking daily active burner running time in hours via minder.tado.com."""
+
+    _attr_device_class = SensorDeviceClass.DURATION
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = UnitOfTime.HOURS
+    _attr_icon = "mdi:fire"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_burner_running_time"
+        self._attr_name = "Tado Temps Brûleur Aujourd'hui"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
+            name=self.coordinator.formatted_home_name,
+            manufacturer="Tado (DomoLink)",
+            model="Home Hub",
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        care = (self.coordinator.data or {}).get("boiler_care", {})
+        return care.get("daily_running_hours", 0.0)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        care = (self.coordinator.data or {}).get("boiler_care", {})
+        return {
+            "daily_running_seconds": care.get("daily_running_seconds", 0),
+            "boiler_model": care.get("boiler_model", ""),
+            "boiler_present": care.get("boiler_present", False),
+        }
+
+
+class DomolinkTadoEnergySavingsSensor(CoordinatorEntity[DomolinkTadoCoordinator], SensorEntity):
+    """Sensor displaying monthly energy savings percentage calculated by Tado Energy IQ."""
+
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_icon = "mdi:leaf-circle"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_energy_savings"
+        self._attr_name = "Tado Économies Énergie du Mois"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
+            name=self.coordinator.formatted_home_name,
+            manufacturer="Tado (DomoLink)",
+            model="Home Hub",
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        insights = (self.coordinator.data or {}).get("energy_insights", {})
+        return insights.get("total_savings_percentage", 0.0)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        insights = (self.coordinator.data or {}).get("energy_insights", {})
+        return {
+            "open_window_detections": insights.get("open_window_detections", 0),
+            "sunshine_duration_hours": insights.get("sunshine_duration_hours", 0.0),
+            "away_duration_hours": insights.get("away_duration_hours", 0.0),
+            "manual_control_saving": insights.get("manual_control_saving", 0.0),
+        }
+
+
+class DomolinkTadoHeatPumpCopSensor(CoordinatorEntity[DomolinkTadoCoordinator], SensorEntity):
+    """Sensor reporting Heat Pump live Coefficient of Performance (COP) via balance-hp / GraphQL."""
+
+    _attr_icon = "mdi:heat-pump"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_heat_pump_cop"
+        self._attr_name = "Tado Pompe à Chaleur COP"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self.coordinator.home_id}_home")},
+            name=self.coordinator.formatted_home_name,
+            manufacturer="Tado (DomoLink)",
+            model="Home Hub",
+        )
+
+    @property
+    def native_value(self) -> float | None:
+        insights = (self.coordinator.data or {}).get("energy_insights", {})
+        return insights.get("cop_heating")
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        insights = (self.coordinator.data or {}).get("energy_insights", {})
+        return {
+            "cop_heating": insights.get("cop_heating"),
+            "cop_domestic_hot_water": insights.get("cop_dhw"),
+        }
+
