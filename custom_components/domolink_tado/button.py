@@ -31,8 +31,9 @@ async def async_setup_entry(
 
     # 2. Dynamic Zone Buttons
     added_zone_buttons: set[int] = set()
+    added_device_buttons: set[str] = set()
 
-    def _check_and_add_zone_buttons() -> None:
+    def _check_and_add_buttons() -> None:
         new_buttons: list[ButtonEntity] = []
         zones = (coordinator.data or {}).get("zones", {})
         for zone_id in zones:
@@ -41,11 +42,19 @@ async def async_setup_entry(
                 new_buttons.append(DomolinkTadoZoneBoostButton(coordinator, zone_id))
                 added_zone_buttons.add(zone_id)
 
+        devices = (coordinator.data or {}).get("devices", {})
+        for serial, dev in devices.items():
+            if serial not in added_device_buttons:
+                new_buttons.append(DomolinkTadoRebootDeviceButton(coordinator, serial))
+                if dev.get("supportsIdentify") or dev.get("graphql_id") or str(dev.get("deviceType", "")).startswith(("VA", "RU", "SU")):
+                    new_buttons.append(DomolinkTadoIdentifyDeviceButton(coordinator, serial))
+                added_device_buttons.add(serial)
+
         if new_buttons:
             async_add_entities(new_buttons)
 
-    _check_and_add_zone_buttons()
-    entry.async_on_unload(coordinator.async_add_listener(_check_and_add_zone_buttons))
+    _check_and_add_buttons()
+    entry.async_on_unload(coordinator.async_add_listener(_check_and_add_buttons))
 
 
 class DomolinkTadoResumeAllSchedulesButton(CoordinatorEntity[DomolinkTadoCoordinator], ButtonEntity):
@@ -176,3 +185,64 @@ class DomolinkTadoZoneBoostButton(CoordinatorEntity[DomolinkTadoCoordinator], Bu
     async def async_press(self) -> None:
         """Déclencher le boost intelligent sur la pièce."""
         await self.coordinator.async_set_zone_boost(self.zone_id)
+
+
+class DomolinkTadoIdentifyDeviceButton(CoordinatorEntity[DomolinkTadoCoordinator], ButtonEntity):
+    """Bouton pour faire clignoter l'écran LED d'une tête de radiateur ou thermostat."""
+
+    _attr_icon = "mdi:led-on"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator, serial_number: str) -> None:
+        super().__init__(coordinator)
+        self.serial_number = serial_number
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{serial_number}_identify"
+        self._attr_name = f"Tado {serial_number} Identifier (LED)"
+
+    @property
+    def _device_data(self) -> dict[str, Any]:
+        return (self.coordinator.data or {}).get("devices", {}).get(self.serial_number, {})
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        d = self._device_data
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"device_{self.serial_number}")},
+            name=f"Tado {d.get('deviceType', 'Appareil')} ({self.serial_number})",
+            manufacturer="Tado (DomoLink)",
+            serial_number=self.serial_number,
+        )
+
+    async def async_press(self) -> None:
+        """Faire clignoter l'écran LED de l'appareil."""
+        await self.coordinator.async_identify_device(self.serial_number)
+
+
+class DomolinkTadoRebootDeviceButton(CoordinatorEntity[DomolinkTadoCoordinator], ButtonEntity):
+    """Bouton pour redémarrer à distance une vanne, thermostat ou bridge Tado."""
+
+    _attr_icon = "mdi:restart"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator, serial_number: str) -> None:
+        super().__init__(coordinator)
+        self.serial_number = serial_number
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{serial_number}_reboot"
+        self._attr_name = f"Tado {serial_number} Redémarrer"
+
+    @property
+    def _device_data(self) -> dict[str, Any]:
+        return (self.coordinator.data or {}).get("devices", {}).get(self.serial_number, {})
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        d = self._device_data
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"device_{self.serial_number}")},
+            name=f"Tado {d.get('deviceType', 'Appareil')} ({self.serial_number})",
+            manufacturer="Tado (DomoLink)",
+            serial_number=self.serial_number,
+        )
+
+    async def async_press(self) -> None:
+        """Redémarrer l'appareil."""
+        await self.coordinator.async_reboot_device(self.serial_number)
+

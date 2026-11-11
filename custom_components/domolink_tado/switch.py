@@ -31,6 +31,7 @@ async def async_setup_entry(
     # 2. Dynamic Zone & Device Switches (Child Lock & Zone Overlay)
     added_child_locks: set[str] = set()
     added_zone_overlays: set[int] = set()
+    added_dazzle_switches: set[str] = set()
 
     def _check_and_add_dynamic_switches() -> None:
         new_switches: list[SwitchEntity] = []
@@ -42,7 +43,12 @@ async def async_setup_entry(
                 new_switches.append(DomolinkTadoChildLockSwitch(coordinator, serial))
                 added_child_locks.add(serial)
 
-        # 2. Zone Overlay switches (active vs schedule)
+            # 2. Dazzle Switch (Display brightness / inverted display)
+            if serial not in added_dazzle_switches and ("dazzleEnabled" in dev or dev.get("graphql_id")):
+                new_switches.append(DomolinkTadoDeviceDazzleSwitch(coordinator, serial))
+                added_dazzle_switches.add(serial)
+
+        # 3. Zone Overlay switches (active vs schedule)
         zones = (coordinator.data or {}).get("zones", {})
         for zone_id in zones:
             if zone_id not in added_zone_overlays:
@@ -207,3 +213,42 @@ class DomolinkTadoGlobalEcoSwitch(CoordinatorEntity[DomolinkTadoCoordinator], Sw
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Désactiver le mode éco (reprendre le planning automatique)."""
         await self.coordinator.async_resume_all_schedules()
+
+
+class DomolinkTadoDeviceDazzleSwitch(CoordinatorEntity[DomolinkTadoCoordinator], SwitchEntity):
+    """Switch pour activer/désactiver le mode d'affichage lumineux (Dazzle) d'une tête thermostatique."""
+
+    _attr_icon = "mdi:brightness-6"
+
+    def __init__(self, coordinator: DomolinkTadoCoordinator, serial_number: str) -> None:
+        super().__init__(coordinator)
+        self.serial_number = serial_number
+        self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_{serial_number}_dazzle"
+        self._attr_name = f"Tado {serial_number} Affichage Lumineux (Dazzle)"
+
+    @property
+    def _device_data(self) -> dict[str, Any]:
+        return (self.coordinator.data or {}).get("devices", {}).get(self.serial_number, {})
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        d = self._device_data
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"device_{self.serial_number}")},
+            name=f"Tado {d.get('deviceType', 'Appareil')} ({self.serial_number})",
+            manufacturer="Tado (DomoLink)",
+            serial_number=self.serial_number,
+        )
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._device_data.get("dazzleEnabled", False))
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Activer l'affichage Dazzle."""
+        await self.coordinator.async_set_device_dazzle(self.serial_number, True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Désactiver l'affichage Dazzle."""
+        await self.coordinator.async_set_device_dazzle(self.serial_number, False)
+

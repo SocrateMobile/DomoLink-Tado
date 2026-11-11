@@ -140,6 +140,17 @@ save_room_sensors:
       selector:
         object:
 
+save_window_contacts:
+  name: Sauvegarder les capteurs d'ouverture par pièce
+  description: Associe des capteurs de contact (binary_sensor.*) par pièce pour couper le chauffage dès l'ouverture d'une fenêtre.
+  fields:
+    contacts:
+      name: Capteurs de contact par pièce
+      description: "Objet JSON associant l'ID de zone à une entité ou liste d'entités de contact (ex. {\"1\": [\"binary_sensor.fenetre_salon\"]})."
+      required: true
+      selector:
+        object:
+
 set_valve_calibration_mode:
   name: Définir le mode de calibration d'une vanne
   description: Bascule une tête thermostatique entre le mode MANUEL et le mode AUTO (auto-calibrage sur la moyenne des capteurs de la pièce).
@@ -163,6 +174,57 @@ set_valve_calibration_mode:
 reauthenticate:
   name: Ré-authentifier le compte Tado
   description: Déclenche le flux de ré-authentification Device Flow pour renouveler le jeton de connexion Tado.
+
+identify_device:
+  name: Identifier un appareil (Clignotement LED)
+  description: Fait clignoter l'écran LED ou l'anneau lumineux d'une tête thermostatique ou d'un thermostat pour la repérer physiquement.
+  fields:
+    device_serial:
+      name: Numéro de série de l'appareil
+      description: Numéro de série de l'équipement Tado (ex. VA1234567890).
+      required: true
+      selector:
+        text:
+
+reboot_device:
+  name: Redémarrer un appareil Tado
+  description: Envoie une commande de redémarrage matériel à une tête de radiateur, un thermostat ou au bridge.
+  fields:
+    device_serial:
+      name: Numéro de série de l'appareil
+      description: Numéro de série de l'équipement Tado (ex. VA1234567890).
+      required: true
+      selector:
+        text:
+
+set_device_dazzle:
+  name: Activer/Désactiver l'affichage lumineux (Dazzle)
+  description: Bascule l'affichage haute lisibilité / inversé sur une tête thermostatique.
+  fields:
+    device_serial:
+      name: Numéro de série de l'appareil
+      description: Numéro de série de la tête Tado (ex. VA1234567890).
+      required: true
+      selector:
+        text:
+    enabled:
+      name: Activé
+      description: Activer (vrai) ou désactiver (faux) le mode Dazzle.
+      default: true
+      selector:
+        boolean:
+
+pair_local_bridge:
+  name: Associer le pont Tado en local (HomeKit LAN)
+  description: Réalise l'appairage direct sans cloud du boîtier Tado dans Home Assistant avec le code PIN HomeKit à 8 chiffres imprimé sous le boîtier.
+  fields:
+    pin:
+      name: Code PIN HomeKit (XXX-XX-XXX)
+      description: Code d'association HomeKit à 8 chiffres imprimé sous votre Internet Bridge Tado.
+      required: true
+      selector:
+        text:
+
 
 
 

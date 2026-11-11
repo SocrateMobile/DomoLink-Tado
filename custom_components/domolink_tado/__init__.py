@@ -11,6 +11,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.service import async_register_admin_service
+from homeassistant.helpers.storage import Store
 
 try:
     from homeassistant.components.http import StaticPathConfig
@@ -36,6 +37,7 @@ from .const import (
 )
 from .coordinator import DomolinkTadoCoordinator
 from .tado_api import TadoClient
+from .window_guard import WindowGuard
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -90,9 +92,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         raise ConfigEntryNotReady(f"Serveurs Tado temporairement indisponibles: {err}") from err
 
+    # Initialisation du WindowGuard (gestionnaire événementiel d'aération)
+    window_guard_store = Store(hass, 1, f"{DOMAIN}_window_guard_{entry.entry_id}")
+    window_guard = WindowGuard(hass, coordinator, window_guard_store)
+    await window_guard.async_setup()
+    coordinator.window_guard = window_guard
+
     hass.data[DOMAIN][entry.entry_id] = {
         "coordinator": coordinator,
         "client": client,
+        "window_guard": window_guard,
     }
 
     # Charger toutes les plateformes d'entités
@@ -196,12 +205,42 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         sensors = call.data.get("sensors", {})
         await coordinator.async_save_room_sensors(sensors)
 
+    async def handle_save_window_contacts(call: ServiceCall) -> None:
+        """Sauvegarder les capteurs d'ouverture de fenêtre par pièce."""
+        contacts = call.data.get("contacts", {})
+        await coordinator.async_save_window_contacts(contacts)
+
     async def handle_set_valve_calibration_mode(call: ServiceCall) -> None:
         """Définir le mode de calibration (AUTO ou MANUAL) pour une tête Tado."""
         serial = call.data.get("device_serial")
         mode = call.data.get("mode", CALIBRATION_MODE_MANUAL)
         if serial:
             await coordinator.async_set_valve_calibration_mode(serial, mode)
+
+    async def handle_identify_device(call: ServiceCall) -> None:
+        """Faire clignoter l'écran LED d'une vanne ou thermostat."""
+        serial = call.data.get("device_serial")
+        if serial:
+            await coordinator.async_identify_device(serial)
+
+    async def handle_reboot_device(call: ServiceCall) -> None:
+        """Redémarrer un appareil physique à distance."""
+        serial = call.data.get("device_serial")
+        if serial:
+            await coordinator.async_reboot_device(serial)
+
+    async def handle_set_device_dazzle(call: ServiceCall) -> None:
+        """Activer ou désactiver l'affichage inversé (Dazzle) d'une tête."""
+        serial = call.data.get("device_serial")
+        enabled = call.data.get("enabled", True)
+        if serial:
+            await coordinator.async_set_device_dazzle(serial, enabled)
+
+    async def handle_pair_local_bridge(call: ServiceCall) -> None:
+        """Associer le pont Tado en local via HomeKit Controller sans passer par le cloud."""
+        pin = call.data.get("pin")
+        if pin:
+            await coordinator.async_pair_local_bridge(str(pin))
 
     async def handle_reauthenticate(call: ServiceCall) -> None:
         """Déclencher la ré-authentification Device Flow."""
@@ -234,8 +273,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         async_register_admin_service(hass, DOMAIN, "save_room_labels", handle_save_labels)
     if not hass.services.has_service(DOMAIN, "save_room_sensors"):
         async_register_admin_service(hass, DOMAIN, "save_room_sensors", handle_save_room_sensors)
+    if not hass.services.has_service(DOMAIN, "save_window_contacts"):
+        async_register_admin_service(hass, DOMAIN, "save_window_contacts", handle_save_window_contacts)
     if not hass.services.has_service(DOMAIN, "set_valve_calibration_mode"):
         async_register_admin_service(hass, DOMAIN, "set_valve_calibration_mode", handle_set_valve_calibration_mode)
+    if not hass.services.has_service(DOMAIN, "identify_device"):
+        hass.services.async_register(DOMAIN, "identify_device", handle_identify_device)
+    if not hass.services.has_service(DOMAIN, "reboot_device"):
+        hass.services.async_register(DOMAIN, "reboot_device", handle_reboot_device)
+    if not hass.services.has_service(DOMAIN, "set_device_dazzle"):
+        hass.services.async_register(DOMAIN, "set_device_dazzle", handle_set_device_dazzle)
+    if not hass.services.has_service(DOMAIN, "pair_local_bridge"):
+        async_register_admin_service(hass, DOMAIN, "pair_local_bridge", handle_pair_local_bridge)
     if not hass.services.has_service(DOMAIN, "reauthenticate"):
         async_register_admin_service(hass, DOMAIN, "reauthenticate", handle_reauthenticate)
 
@@ -245,6 +294,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload DomoLink-Tado config entry."""
+    entry_data = hass.data[DOMAIN].get(entry.entry_id, {})
+    window_guard = entry_data.get("window_guard")
+    if window_guard:
+        window_guard.async_unload()
+
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         hass.data[DOMAIN].pop(entry.entry_id)

@@ -51,6 +51,12 @@ if "homeassistant" not in sys.modules:
     class UnitOfTemperature:
         CELSIUS = "°C"
     ha_const.UnitOfTemperature = UnitOfTemperature
+    class UnitOfTime:
+        SECONDS = "s"
+        MINUTES = "min"
+        HOURS = "h"
+        DAYS = "d"
+    ha_const.UnitOfTime = UnitOfTime
 
     ha_climate = make_pkg("homeassistant.components.climate")
     class ClimateEntity: pass
@@ -103,8 +109,10 @@ if "homeassistant" not in sys.modules:
         HUMIDITY = "humidity"
         ENUM = "enum"
         TIMESTAMP = "timestamp"
+        DURATION = "duration"
     class SensorStateClass:
         MEASUREMENT = "measurement"
+        TOTAL_INCREASING = "total_increasing"
     ha_sensor.SensorEntity = SensorEntity
     ha_sensor.SensorDeviceClass = SensorDeviceClass
     ha_sensor.SensorStateClass = SensorStateClass
@@ -162,6 +170,8 @@ if "homeassistant" not in sys.modules:
     ha_exc.HomeAssistantError = HomeAssistantError
 
     ha_helpers = make_pkg("homeassistant.helpers")
+    ha_service = make_pkg("homeassistant.helpers.service")
+    ha_service.async_register_admin_service = MagicMock()
     ha_ent = make_pkg("homeassistant.helpers.entity")
     class DeviceInfo(dict): pass
     ha_ent.DeviceInfo = DeviceInfo

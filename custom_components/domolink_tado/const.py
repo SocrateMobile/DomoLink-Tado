@@ -19,6 +19,22 @@ TADO_API_BASE = "https://my.tado.com/api/v2"
 TADO_DEVICE_AUTH_URL = f"{TADO_AUTH_BASE}/device_authorize"
 TADO_TOKEN_URL = f"{TADO_AUTH_BASE}/token"
 
+# Microservices Tado v10.9 (Rétro-ingénierie APK)
+TADO_GRAPHQL_URL = "https://ext.api.tado.com/apps/graphql"
+TADO_GRAPHQL_FALLBACK_URL = "https://app.tado.com/api/ext.api.tado.com/apps/graphql"
+TADO_IVAR_GRAPHQL_URL = "https://ivar.tado.com/graphql"
+TADO_IVAR_FALLBACK_URL = "https://app.tado.com/api/ivar.tado.com/graphql"
+TADO_MINDER_API_URL = "https://minder.tado.com/v1"
+TADO_MINDER_FALLBACK_URL = "https://app.tado.com/api/minder.tado.com/v1"
+TADO_HOPS_API_URL = "https://hops.tado.com"
+TADO_HOPS_FALLBACK_URL = "https://app.tado.com/api/hops.tado.com"
+
+# Services Home Assistant spécifiques DomoLink-Tado
+SERVICE_IDENTIFY_DEVICE = "identify_device"
+SERVICE_REBOOT_DEVICE = "reboot_device"
+SERVICE_SET_DEVICE_DAZZLE = "set_device_dazzle"
+SERVICE_PAIR_LOCAL_BRIDGE = "pair_local_bridge"
+
 # Client ID officiel Tado pour OAuth2 Device Flow
 TADO_CLIENT_ID = "1bb50063-6b0c-4d11-bd99-387f4a91cc46"
 TADO_SCOPE = "home.user offline_access"
@@ -47,9 +63,17 @@ CONF_SMART_BOOST_TEMP = "smart_boost_temp"
 CONF_SMART_BOOST_DURATION = "smart_boost_duration"
 CONF_ZONE_TEMP_ENTITIES = "zone_temp_entities"
 CONF_ZONE_HUMIDITY_ENTITIES = "zone_humidity_entities"
+CONF_ZONE_CONTACT_ENTITIES = "zone_contact_entities"
+CONF_WINDOW_OPEN_DELAY = "window_open_delay"
+CONF_WINDOW_CLOSE_DELAY = "window_close_delay"
+CONF_WINDOW_MAX_DURATION = "window_max_duration"
+CONF_WINDOW_RESTORE_MODE = "window_restore_mode"
+CONF_USE_NATIVE_WINDOW = "use_native_window"
 CONF_AUTO_OFFSET_CALIBRATION = "auto_offset_calibration"
 CONF_VALVE_CALIBRATION_MODES = "valve_calibration_modes"
 CONF_SHOW_QUOTA_SENSORS = "show_quota_sensors"
+CONF_LOCAL_HOMEKIT_PIN = "local_homekit_pin"
+CONF_ENABLE_LOCAL_PRIORITY = "enable_local_priority"
 
 # Modes de calibration de température par vanne
 CALIBRATION_MODE_AUTO = "AUTO"
@@ -68,6 +92,15 @@ DEFAULT_OVERLAY_MODE = OVERLAY_NEXT_TIME_BLOCK
 DEFAULT_OVERLAY_DURATION = 3600  # 1 heure par défaut
 DEFAULT_AUTO_WINDOW_ENABLED = True
 DEFAULT_AUTO_WINDOW_DURATION = 900  # 15 minutes
+DEFAULT_WINDOW_OPEN_DELAY = 30  # 30 secondes avant coupure
+DEFAULT_WINDOW_CLOSE_DELAY = 60  # 60 secondes après fermeture avant restauration
+DEFAULT_WINDOW_MAX_DURATION = 1800  # 30 minutes max sécurité
+WINDOW_RESTORE_RESUME = "RESUME"
+WINDOW_RESTORE_PREVIOUS = "RESTORE_PREVIOUS"
+DEFAULT_WINDOW_RESTORE_MODE = WINDOW_RESTORE_RESUME
+DEFAULT_USE_NATIVE_WINDOW = False
+EVENT_WINDOW_OPENED = "domolink_tado_window_opened"
+EVENT_WINDOW_CLOSED = "domolink_tado_window_closed"
 DEFAULT_ECO_TEMP = 17.0
 DEFAULT_ADAPTIVE_POLLING = True
 DEFAULT_PREHEAT_ENABLED = False
@@ -81,6 +114,8 @@ DEFAULT_SMART_BOOST_TEMP = 22.0
 DEFAULT_SMART_BOOST_DURATION = 1800  # 30 minutes
 DEFAULT_AUTO_OFFSET_CALIBRATION = False
 DEFAULT_SHOW_QUOTA_SENSORS = True
+DEFAULT_ENABLE_LOCAL_PRIORITY = True
+DEFAULT_LOCAL_HOMEKIT_PIN = ""
 OFFSET_MIN_STEP = 0.5  # Écart minimal en °C pour déclencher une mise à jour d'offset
 OFFSET_UPDATE_COOLDOWN = 1800  # 30 minutes minimum entre deux mises à jour d'offset par appareil
 
