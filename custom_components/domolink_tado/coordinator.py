@@ -178,16 +178,111 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             until - now_ts,
                         )
 
-                # Restauration des données du coordinateur
+                # Restauration des données du coordinateur (normalisation des clés JSON str -> int)
                 last_data = cached.get("last_data")
                 if isinstance(last_data, dict) and last_data.get("zones"):
+                    last_data["zones"] = {
+                        int(k) if str(k).isdigit() else k: v
+                        for k, v in last_data["zones"].items()
+                    }
                     self.data = last_data
-                elif self._zones_raw:
+                else:
+                    if not self._zones_raw:
+                        self._reconstruct_from_ha_registry()
+                    if self._zones_raw:
+                        synthesized = self._synthesize_data_from_cache()
+                        if synthesized:
+                            self.data = synthesized
+            else:
+                if not self._zones_raw and self._reconstruct_from_ha_registry():
                     synthesized = self._synthesize_data_from_cache()
                     if synthesized:
                         self.data = synthesized
         except Exception as err:
             _LOGGER.warning("DomoLink-Tado: Erreur lors du chargement du cache disque: %s", err)
+
+    def _reconstruct_from_ha_registry(self) -> bool:
+        """Reconstruct raw zones and devices from Home Assistant device_registry when disk cache is empty."""
+        try:
+            from homeassistant.helpers import device_registry as dr
+            dev_reg = dr.async_get(self.hass)
+            if not dev_reg or not getattr(self.entry, "entry_id", None):
+                return False
+            entries = dr.async_entries_for_config_entry(dev_reg, self.entry.entry_id)
+            if not isinstance(entries, (list, tuple)) or not entries:
+                return False
+
+            zones_raw: list[dict[str, Any]] = []
+            devices_raw: list[dict[str, Any]] = []
+            seen_zones: set[int] = set()
+            seen_serials: set[str] = set()
+
+            home_prefix = f"{self.home_id}_"
+
+            for dev_entry in entries:
+                for domain, ident in getattr(dev_entry, "identifiers", set()):
+                    if domain != DOMAIN:
+                        continue
+                    if ident == f"{self.home_id}_home":
+                        continue
+                    if ident.startswith("device_"):
+                        serial = ident[len("device_"):]
+                        if serial and serial not in seen_serials:
+                            seen_serials.add(serial)
+                            model = getattr(dev_entry, "model", None) or "VA02"
+                            devices_raw.append({
+                                "serialNo": serial,
+                                "shortSerialNo": serial,
+                                "deviceType": model,
+                                "connectionState": {"value": True},
+                                "batteryState": "NORMAL",
+                                "characteristics": {"capabilities": []},
+                            })
+                    elif ident.startswith(home_prefix):
+                        zid_str = ident[len(home_prefix):]
+                        if zid_str.isdigit():
+                            zid = int(zid_str)
+                            if zid not in seen_zones:
+                                seen_zones.add(zid)
+                                raw_name = getattr(dev_entry, "name", None) or f"Zone {zid}"
+                                z_name = raw_name[5:] if raw_name.startswith("Tado ") else raw_name
+                                model = getattr(dev_entry, "model", None) or "VA02"
+                                z_type = "AIR_CONDITIONING" if "AC" in model.upper() else (
+                                    "HOT_WATER" if "HOT_WATER" in z_name.upper() else "HEATING"
+                                )
+                                z_devs = []
+                                serial_no = getattr(dev_entry, "serial_number", None)
+                                if serial_no:
+                                    z_devs.append({"serialNo": serial_no, "deviceType": model})
+                                    if serial_no not in seen_serials:
+                                        seen_serials.add(serial_no)
+                                        devices_raw.append({
+                                            "serialNo": serial_no,
+                                            "shortSerialNo": serial_no,
+                                            "deviceType": model,
+                                            "connectionState": {"value": True},
+                                            "batteryState": "NORMAL",
+                                            "characteristics": {"capabilities": []},
+                                        })
+                                zones_raw.append({
+                                    "id": zid,
+                                    "name": z_name,
+                                    "type": z_type,
+                                    "devices": z_devs,
+                                })
+
+            if zones_raw:
+                self._zones_raw = zones_raw
+                self._devices_raw = devices_raw
+                _LOGGER.info(
+                    "DomoLink-Tado: Topologie reconstruite depuis le registre HA (%d zones, %d appareils) pour démarrage hors-ligne.",
+                    len(zones_raw),
+                    len(devices_raw),
+                )
+                return True
+        except Exception as err:
+            _LOGGER.debug("DomoLink-Tado: Impossible de reconstruire depuis le registre HA: %s", err)
+        return False
 
     async def _async_save_cache(self) -> None:
         """Save persistent state cache to disk."""
@@ -217,7 +312,9 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.debug("DomoLink-Tado: Impossible de sauvegarder le cache disque: %s", err)
 
     def _synthesize_data_from_cache(self) -> dict[str, Any] | None:
-        """Build minimal coordinator data dictionary from cached raw topology."""
+        """Build minimal coordinator data dictionary from cached raw topology or HA device registry."""
+        if not self._zones_raw:
+            self._reconstruct_from_ha_registry()
         if not self._zones_raw:
             return None
 
@@ -240,6 +337,8 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         self.local_bridge.discover_local_entities()
         labels_map = self.entry.options.get(CONF_ROOM_LABELS, {}) if self.entry else {}
+        temp_entities = self.entry.options.get(CONF_ZONE_TEMP_ENTITIES, {}) if self.entry else {}
+        hum_entities = self.entry.options.get(CONF_ZONE_HUMIDITY_ENTITIES, {}) if self.entry else {}
         zones_data: dict[int, dict[str, Any]] = {}
 
         for z in self._zones_raw:
@@ -255,20 +354,81 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if isinstance(room_labels, str):
                 room_labels = [lbl.strip() for lbl in room_labels.split(",") if lbl.strip()]
 
+            inside_temp: float | None = None
+            humidity: float | None = None
+            target_temp: float = 20.0
+            power: str = "OFF"
+            is_ext_temp = False
+            is_ext_hum = False
+
+            if getattr(self.hass, "states", None):
+                # 1. Capteurs externes configurés
+                ext_t = temp_entities.get(str(zid))
+                t_list = ext_t if isinstance(ext_t, list) else ([x.strip() for x in ext_t.split(",") if x.strip()] if isinstance(ext_t, str) else [])
+                valid_t: list[float] = []
+                for eid in t_list:
+                    st = self.hass.states.get(eid)
+                    if st and st.state not in ("unavailable", "unknown"):
+                        try:
+                            valid_t.append(float(st.state))
+                        except (ValueError, TypeError):
+                            pass
+                if valid_t:
+                    inside_temp = round(sum(valid_t) / len(valid_t), 1)
+                    is_ext_temp = True
+
+                ext_h = hum_entities.get(str(zid))
+                h_list = ext_h if isinstance(ext_h, list) else ([x.strip() for x in ext_h.split(",") if x.strip()] if isinstance(ext_h, str) else [])
+                valid_h: list[float] = []
+                for eid in h_list:
+                    st = self.hass.states.get(eid)
+                    if st and st.state not in ("unavailable", "unknown"):
+                        try:
+                            valid_h.append(float(st.state))
+                        except (ValueError, TypeError):
+                            pass
+                if valid_h:
+                    humidity = round(sum(valid_h) / len(valid_h), 1)
+                    is_ext_hum = True
+
+                # 2. Pont Local HomeKit / Matter
+                local_ent = self.local_bridge.get_local_entity_for_zone(zid)
+                if isinstance(local_ent, str):
+                    lst = self.hass.states.get(local_ent)
+                    if lst and lst.state not in ("unavailable", "unknown"):
+                        attrs = getattr(lst, "attributes", {}) or {}
+                        if inside_temp is None and attrs.get("current_temperature") is not None:
+                            try:
+                                inside_temp = float(attrs["current_temperature"])
+                            except (ValueError, TypeError):
+                                pass
+                        if humidity is None and attrs.get("current_humidity") is not None:
+                            try:
+                                humidity = float(attrs["current_humidity"])
+                            except (ValueError, TypeError):
+                                pass
+                        if attrs.get("temperature") is not None:
+                            try:
+                                target_temp = float(attrs["temperature"])
+                            except (ValueError, TypeError):
+                                pass
+                        if lst.state in ("heat", "cool", "heat_cool", "auto"):
+                            power = "ON"
+
             zones_data[zid] = {
                 "info": z,
                 "state": {},
                 "name": z.get("name", f"Zone {zid}"),
                 "zone_id": zid,
                 "type": z.get("type", "HEATING"),
-                "inside_temperature": None,
-                "raw_inside_temperature": None,
-                "humidity": None,
-                "raw_humidity": None,
-                "is_external_temp": False,
-                "is_external_humidity": False,
-                "target_temperature": 20.0,
-                "power": "OFF",
+                "inside_temperature": inside_temp,
+                "raw_inside_temperature": inside_temp,
+                "humidity": humidity,
+                "raw_humidity": humidity,
+                "is_external_temp": is_ext_temp,
+                "is_external_humidity": is_ext_hum,
+                "target_temperature": target_temp,
+                "power": power,
                 "heating_power": 0.0,
                 "ac_mode": None,
                 "fan_speed": None,
@@ -282,10 +442,10 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "preheat_duration": 0,
                 "preheat_target_temp": None,
                 "preheat_now": False,
-                "dew_point": None,
-                "absolute_humidity": None,
-                "mold_risk_level": "FAIBLE",
-                "mold_risk_problem": False,
+                "dew_point": calculate_dew_point(inside_temp, humidity),
+                "absolute_humidity": calculate_absolute_humidity(inside_temp, humidity),
+                "mold_risk_level": calculate_mold_risk_level(inside_temp, humidity),
+                "mold_risk_problem": calculate_mold_risk_problem(inside_temp, humidity),
                 "ventilation_recommended": False,
                 "devices": z_devices,
                 "labels": room_labels,

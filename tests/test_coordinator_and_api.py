@@ -2462,3 +2462,52 @@ class TestV1517QuotaOptimizationAndAttributes(unittest.IsolatedAsyncioTestCase):
         client.get_zone_states.assert_not_called()
         client.get_zones.assert_not_called()
         client.get_devices.assert_not_called()
+
+    async def test_reconstruct_from_ha_registry_and_synthesize(self):
+        """Test cold start topology reconstruction from HA device_registry when disk cache is empty."""
+        import sys
+        import types
+        from unittest.mock import MagicMock, AsyncMock
+        from custom_components.domolink_tado.const import DOMAIN
+
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "test_entry"
+        entry.options = {}
+        client = TadoClient(MagicMock())
+
+        coord = DomolinkTadoCoordinator(hass, entry, client, home_id=631338, home_name="Tado Home")
+        coord._cache_store.async_load = AsyncMock(return_value=None)
+
+        # Mock device_registry with existing HA devices
+        dev_zone = MagicMock()
+        dev_zone.identifiers = {(DOMAIN, "631338_1")}
+        dev_zone.name = "Tado Bureau JF"
+        dev_zone.model = "VA02"
+        dev_zone.serial_number = "VA123456"
+
+        dev_hw = MagicMock()
+        dev_hw.identifiers = {(DOMAIN, "device_VA123456")}
+        dev_hw.name = "Tado VA02 (VA123456)"
+        dev_hw.model = "VA02"
+        dev_hw.serial_number = "VA123456"
+
+        dr_mock = types.ModuleType("homeassistant.helpers.device_registry")
+        dr_mock.async_get = MagicMock(return_value=MagicMock())
+        dr_mock.async_entries_for_config_entry = MagicMock(return_value=[dev_zone, dev_hw])
+
+        old_dr = sys.modules.get("homeassistant.helpers.device_registry")
+        sys.modules["homeassistant.helpers.device_registry"] = dr_mock
+        try:
+            await coord.async_load_cache()
+        finally:
+            if old_dr is not None:
+                sys.modules["homeassistant.helpers.device_registry"] = old_dr
+            else:
+                sys.modules.pop("homeassistant.helpers.device_registry", None)
+
+        self.assertIsNotNone(coord.data)
+        self.assertIn(1, coord.data["zones"])
+        self.assertEqual(coord.data["zones"][1]["name"], "Bureau JF")
+        self.assertIn("VA123456", coord.data["devices"])
+        self.assertEqual(coord._last_discovery_time, 0.0)
