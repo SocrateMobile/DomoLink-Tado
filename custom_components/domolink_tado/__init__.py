@@ -82,15 +82,37 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         home_name=home_name,
     )
 
-    # Premier rafraîchissement avec tolérance au démarrage (ConfigEntryNotReady)
-    try:
-        await coordinator.async_config_entry_first_refresh()
-    except Exception as err:
+    # 1. Charger immédiatement le cache persistant disque (topologie et disjoncteur)
+    await coordinator.async_load_cache()
+
+    import time
+    from datetime import timedelta
+    now = time.time()
+    circuit_active = client.rate_limited_until > now
+
+    if circuit_active and coordinator.data and coordinator.data.get("zones"):
+        remaining_pause = int(client.rate_limited_until - now)
         _LOGGER.warning(
-            "DomoLink-Tado: Échec de connexion initiale aux serveurs Tado (%s). Nouvelle tentative automatique en arrière-plan...",
-            err,
+            "DomoLink-Tado: Démarrage hors-ligne réussi avec données en cache. Disjoncteur Tado actif pour %ds (0 appel Cloud jusqu'à la réinitialisation).",
+            remaining_pause,
         )
-        raise ConfigEntryNotReady(f"Serveurs Tado temporairement indisponibles: {err}") from err
+        coordinator.update_interval = timedelta(seconds=min(max(remaining_pause + 5, 60), 3600))
+    else:
+        # Premier rafraîchissement avec tolérance au démarrage (ConfigEntryNotReady)
+        try:
+            await coordinator.async_config_entry_first_refresh()
+        except Exception as err:
+            if coordinator.data and coordinator.data.get("zones"):
+                _LOGGER.warning(
+                    "DomoLink-Tado: Connexion Cloud initiale impossible (%s), mais démarrage poursuivi grâce au cache local.",
+                    err,
+                )
+            else:
+                _LOGGER.warning(
+                    "DomoLink-Tado: Échec de connexion initiale aux serveurs Tado (%s). Nouvelle tentative automatique en arrière-plan...",
+                    err,
+                )
+                raise ConfigEntryNotReady(f"Serveurs Tado temporairement indisponibles: {err}") from err
 
     # Initialisation du WindowGuard (gestionnaire événementiel d'aération)
     window_guard_store = Store(hass, 1, f"{DOMAIN}_window_guard_{entry.entry_id}")
