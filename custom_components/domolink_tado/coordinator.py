@@ -2122,6 +2122,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "active": self.local_bridge.has_local_entities,
                 "zones_mapped": {str(k): v for k, v in self.local_bridge._zone_to_local_entity.items()},
                 "serials_mapped": dict(self.local_bridge._serial_to_local_entity),
+                "discovery": self.local_bridge.get_discovery_status(),
             },
             "window_guard": {
                 "active_episodes": wg_episodes,
