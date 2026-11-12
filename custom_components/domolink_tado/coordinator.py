@@ -714,7 +714,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         boiler_model = ""
                         if boiler_id and not self._boiler_system_details:
                             try:
-                                ivar_sys = await self.client.get_ivar_boiler_details(int(boiler_id))
+                                ivar_sys = await self.client.get_ivar_boiler_details(boiler_id)
                                 if ivar_sys:
                                     self._boiler_system_details = ivar_sys
                             except Exception:

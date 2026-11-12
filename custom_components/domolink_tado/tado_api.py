@@ -1026,10 +1026,10 @@ class TadoClient:
         data = await self.async_graphql(query, variables={"deviceId": str(device_id), "relayMode": str(relay_mode)})
         return (data.get("setRelayMode") or {}) if isinstance(data, dict) else {}
 
-    async def get_ivar_boiler_details(self, system_id: int) -> dict[str, Any]:
+    async def get_ivar_boiler_details(self, system_id: int | str) -> dict[str, Any]:
         """Lookup boiler manufacturer and model specifications via ivar.tado.com."""
         query = """
-        query system($id: Int!) {
+        query system($id: ID!) {
           system(id: $id) {
             id
             modelName
@@ -1042,7 +1042,7 @@ class TadoClient:
         """
         data = await self.async_graphql(
             query,
-            variables={"id": int(system_id)},
+            variables={"id": str(system_id)},
             endpoint=TADO_IVAR_GRAPHQL_URL,
             fallback_endpoint=TADO_IVAR_FALLBACK_URL,
         )

@@ -44,22 +44,32 @@ class LocalBridgeManager:
         zones = (self.coordinator.data or {}).get("zones", {})
         devices = (self.coordinator.data or {}).get("devices", {})
 
+        # Resolve entity registry cleanly without deprecated hass.helpers
+        ent_reg = None
+        try:
+            from homeassistant.helpers import entity_registry as er
+            if hasattr(er, "async_get"):
+                ent_reg = er.async_get(self.hass)
+        except Exception:
+            pass
+
         # 1. Gather all local climate entities in HA
         climate_states = self.hass.states.async_all("climate")
         for st in climate_states:
             ent_id = st.entity_id
-            attrs = st.attributes or {}
+            attrs = getattr(st, "attributes", None) or {}
+            if attrs.get("integration") == "domolink_tado" or "domolink" in ent_id.lower():
+                continue
+
             friendly_name = (attrs.get("friendly_name") or "").lower()
 
-            # Inspect device registry if available
-            dev_reg = getattr(self.hass.helpers, "device_registry", None)
-            dev_id = None
-            if hasattr(self.hass, "data") and "entity_registry" in self.hass.data:
+            # Strictly verify platform via entity_registry when available
+            if ent_reg is not None:
                 try:
-                    ent_reg = self.hass.data["entity_registry"]
                     entry = ent_reg.async_get(ent_id)
-                    if entry and entry.platform in ("homekit_controller", "matter"):
-                        dev_id = entry.device_id
+                    plat = getattr(entry, "platform", None) if entry else None
+                    if isinstance(plat, str) and plat not in ("homekit_controller", "matter"):
+                        continue
                 except Exception:
                     pass
 
