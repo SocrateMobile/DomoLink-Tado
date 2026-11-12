@@ -294,7 +294,7 @@ class DomolinkTadoQuotaTierSensor(CoordinatorEntity[DomolinkTadoCoordinator], Se
         super().__init__(coordinator)
         self._attr_unique_id = f"domolink_tado_{coordinator.home_id}_quota_tier"
         self._attr_name = "Tado Palier Quota API"
-        self._attr_options = ["FREE", "ASSIST", "UNKNOWN"]
+        self._attr_options = ["FREE", "STANDARD", "ASSIST", "UNKNOWN"]
 
     @property
     def device_info(self) -> DeviceInfo:

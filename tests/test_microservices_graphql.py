@@ -337,6 +337,56 @@ class TestNewEntities(unittest.TestCase):
         s_cop = DomolinkTadoHeatPumpCopSensor(self.coordinator)
         self.assertEqual(s_cop.native_value, 4.1)
 
+    def test_quota_tier_sensor_standard(self) -> None:
+        from custom_components.domolink_tado.sensor import DomolinkTadoQuotaTierSensor
+        self.coordinator.data["rate_limit"] = {"tier": "STANDARD"}
+        s_tier = DomolinkTadoQuotaTierSensor(self.coordinator)
+        self.assertIn("STANDARD", s_tier._attr_options)
+        self.assertEqual(s_tier.native_value, "STANDARD")
+
+    def test_get_dev_snapshot_zero_cloud(self) -> None:
+        from custom_components.domolink_tado.coordinator import DomolinkTadoCoordinator
+        from custom_components.domolink_tado.tado_api import TadoClient
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.entry_id = "e1"
+        entry.options = {}
+        client = TadoClient(MagicMock())
+        coord = DomolinkTadoCoordinator(hass, entry, client, home_id=99, home_name="Test")
+        coord.data = {
+            "last_update": "2026-11-12T02:00:00",
+            "weather": {"solar_intensity": 65, "weather_state": "SUNNY"},
+            "boiler_care": {"boiler_present": True, "underfloor_heating_present": True, "boiler_model": "De Dietrich"},
+            "energy_insights": {"has_auto_assist": True, "actionable_devices": [{"serialNumber": "VA99", "needsMounting": True}]},
+            "zones": {
+                1: {
+                    "name": "Bureau",
+                    "type": "HEATING",
+                    "link_state": "ONLINE",
+                    "next_schedule_change": {"start": "2026-11-12T07:00:00Z", "setting": {"temperature": {"celsius": 21.0}}},
+                    "dew_point": 11.2,
+                    "absolute_humidity": 9.8,
+                }
+            },
+            "devices": {
+                "VA99": {
+                    "deviceType": "VA02",
+                    "graphql_id": "gql_99",
+                    "controlMode": "STANDALONE",
+                    "relayMode": "OPENTHERM",
+                    "thermInterfaceType": "EMS",
+                    "currentFirmwareVersion": "v98.1",
+                }
+            },
+        }
+        snap = coord.get_dev_snapshot()
+        self.assertEqual(snap["weather"]["solar_intensity"], 65)
+        self.assertTrue(snap["boiler_care"]["underfloor_heating_present"])
+        self.assertEqual(len(snap["hops_actionable_devices"]), 1)
+        self.assertEqual(snap["zones"][0]["dew_point"], 11.2)
+        self.assertEqual(snap["devices"][0]["relay_mode"], "OPENTHERM")
+        self.assertEqual(snap["devices"][0]["graphql_id"], "gql_99")
+
 
 if __name__ == "__main__":
     unittest.main()

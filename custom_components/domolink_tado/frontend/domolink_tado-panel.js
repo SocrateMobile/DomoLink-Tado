@@ -1859,6 +1859,139 @@ class DomolinkTadoPanel extends HTMLElement {
           transform: translateY(-2px);
           box-shadow: 0 6px 20px rgba(37, 99, 235, 0.6);
         }
+
+        /* ── DEV COCKPIT STYLES ── */
+        .dev-view-container {
+          display: flex;
+          flex-direction: column;
+          gap: 20px;
+        }
+        .dev-toolbar {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          background: rgba(15, 23, 42, 0.85);
+          border: 1px solid rgba(56, 189, 248, 0.25);
+          border-radius: 16px;
+          padding: 14px 20px;
+        }
+        .dev-btn {
+          background: rgba(56, 189, 248, 0.14);
+          border: 1px solid rgba(56, 189, 248, 0.35);
+          color: #38bdf8;
+          padding: 7px 14px;
+          border-radius: 10px;
+          font-size: 12px;
+          font-weight: 700;
+          cursor: pointer;
+          transition: all 0.15s ease;
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .dev-btn:hover {
+          background: rgba(56, 189, 248, 0.25);
+          transform: translateY(-1px);
+        }
+        .dev-btn-warn {
+          background: rgba(245, 158, 11, 0.14);
+          border-color: rgba(245, 158, 11, 0.4);
+          color: #fbbf24;
+        }
+        .dev-btn-danger {
+          background: rgba(239, 68, 68, 0.14);
+          border-color: rgba(239, 68, 68, 0.4);
+          color: #f87171;
+        }
+        .dev-btn-ok {
+          background: rgba(16, 185, 129, 0.14);
+          border-color: rgba(16, 185, 129, 0.4);
+          color: #34d399;
+        }
+        .dev-mini-btn {
+          padding: 4px 8px;
+          font-size: 11px;
+          border-radius: 7px;
+        }
+        .dev-kpi-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+          gap: 14px;
+        }
+        .dev-kpi-card {
+          background: rgba(15, 23, 42, 0.72);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 14px;
+          padding: 14px 16px;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+        .dev-kpi-title {
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.7px;
+          color: #94a3b8;
+          font-weight: 700;
+        }
+        .dev-kpi-val {
+          font-size: 20px;
+          font-weight: 800;
+          color: #f8fafc;
+        }
+        .dev-kpi-sub {
+          font-size: 12px;
+          color: #cbd5e1;
+          line-height: 1.4;
+        }
+        .dev-pill {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          padding: 2px 8px;
+          border-radius: 999px;
+          font-size: 11px;
+          font-weight: 700;
+          border: 1px solid rgba(255,255,255,0.12);
+          background: rgba(255,255,255,0.06);
+          color: #e2e8f0;
+        }
+        .dev-pill.ok {
+          background: rgba(16, 185, 129, 0.15);
+          border-color: rgba(16, 185, 129, 0.35);
+          color: #4ade80;
+        }
+        .dev-pill.warn {
+          background: rgba(245, 158, 11, 0.15);
+          border-color: rgba(245, 158, 11, 0.35);
+          color: #fbbf24;
+        }
+        .dev-pill.bad {
+          background: rgba(239, 68, 68, 0.15);
+          border-color: rgba(239, 68, 68, 0.35);
+          color: #f87171;
+        }
+        .dev-pill.info {
+          background: rgba(56, 189, 248, 0.15);
+          border-color: rgba(56, 189, 248, 0.35);
+          color: #38bdf8;
+        }
+        .dev-json-box {
+          background: #090d16;
+          border: 1px solid rgba(255, 255, 255, 0.1);
+          border-radius: 12px;
+          padding: 14px;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+          font-size: 12px;
+          line-height: 1.45;
+          color: #a5f3fc;
+          max-height: 440px;
+          overflow: auto;
+          white-space: pre-wrap;
+          word-break: break-word;
+        }
       </style>
 
       <div class="tado-container">
@@ -1881,6 +2014,9 @@ class DomolinkTadoPanel extends HTMLElement {
             </button>
             <button class="nav-tab-btn" id="tabBtnSettings">
               <span>⚙️</span> Paramètres & Configuration
+            </button>
+            <button class="nav-tab-btn" id="tabBtnDev">
+              <span>🛠️</span> DEV
             </button>
           </div>
 
@@ -2125,6 +2261,117 @@ class DomolinkTadoPanel extends HTMLElement {
             </div>
           </div>
         </div>
+
+        <!-- ═══════════════════════════════════════════════ -->
+        <!-- VIEW 3 : COCKPIT DEV & TÉLÉMÉTRIE AVANCÉE       -->
+        <!-- ═══════════════════════════════════════════════ -->
+        <div class="tab-view" id="viewDev">
+          <div class="dev-view-container">
+            <!-- Barre d'outils DEV -->
+            <div class="dev-toolbar">
+              <div>
+                <div style="font-size: 16px; font-weight: 800; color: #f8fafc; display: flex; align-items: center; gap: 8px;">
+                  <span>🛠️</span> Cockpit Télémétrie & Données Bas-Niveau (DEV)
+                </div>
+                <div id="devLastSyncLabel" style="font-size: 12px; color: #94a3b8; margin-top: 2px;">
+                  Lecture locale en RAM Home Assistant (0 appel Cloud Tado).
+                </div>
+              </div>
+              <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <button class="dev-btn" id="btnDevRefreshSnapshot">🔄 Actualiser Snapshot Local (0 Token)</button>
+                <button class="dev-btn dev-btn-ok" id="btnDevCopyJson">📋 Copier JSON Brut</button>
+              </div>
+            </div>
+
+            <!-- 1. KPIs Moteur, QuotaBudget, Pont Local & WindowGuard -->
+            <div class="dev-kpi-grid" id="devEngineKpiGrid"></div>
+
+            <!-- 2. Microservices v10.9 : Boiler Care, Energy IQ, Hops, Météo Solaire -->
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <div>
+                  <h2 class="settings-card-title"><span>🔬</span> Microservices Cloud v10.9 (Boiler Care, Energy IQ, Hops & Solaire)</h2>
+                  <p class="settings-card-desc">Données issues de ext.api.tado.com/apps/graphql, minder.tado.com, ivar.tado.com et hops.tado.com.</p>
+                </div>
+              </div>
+              <div class="dev-kpi-grid" id="devMicroservicesGrid"></div>
+              <div id="devHopsAlertsContainer" style="margin-top: 14px;"></div>
+            </div>
+
+            <!-- 3. Matrice Avancée des Zones (Plannings & Physique de l'Air) -->
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <div>
+                  <h2 class="settings-card-title"><span>📐</span> Matrice Zones : Plannings, Physique Hygrométrique & Pont Local</h2>
+                  <p class="settings-card-desc">Exposition temps réel des champs cachés de zoneStates, physique de l'air et préchauffe adaptative.</p>
+                </div>
+              </div>
+              <div style="overflow-x: auto;">
+                <table class="calibration-table">
+                  <thead>
+                    <tr>
+                      <th>Pièce (Zone ID)</th>
+                      <th>Liaison & Pont LAN</th>
+                      <th>Prochain Changement Planning</th>
+                      <th>Physique Air (Rosée / Abs / Moisissure)</th>
+                      <th>Préchauffe EMA (°C/h & Conseiller)</th>
+                    </tr>
+                  </thead>
+                  <tbody id="devZonesTableBody"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- 4. Console Matériel Bas-Niveau GraphQL & Matter -->
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <div>
+                  <h2 class="settings-card-title"><span>🔩</span> Console Matériel Bas-Niveau (GraphQL Devices, Ivar & Matter)</h2>
+                  <p class="settings-card-desc">Identifiants internes GraphQL, qualité radio, modes relais/contrôle, et actions matérielles directes.</p>
+                </div>
+              </div>
+              <div style="overflow-x: auto;">
+                <table class="calibration-table">
+                  <thead>
+                    <tr>
+                      <th>Appareil & N° Série</th>
+                      <th>GraphQL ID & Capacités</th>
+                      <th>Radio, Montage & Offset</th>
+                      <th>Modes (Control / Relay / Interface)</th>
+                      <th>Actions Matériel</th>
+                    </tr>
+                  </thead>
+                  <tbody id="devDevicesTableBody"></tbody>
+                </table>
+              </div>
+              <div id="devMatterSecretBanner" style="margin-top: 12px;"></div>
+            </div>
+
+            <!-- 5. Inspecteur JSON Brut Filtrable -->
+            <div class="settings-card">
+              <div class="settings-card-header">
+                <div>
+                  <h2 class="settings-card-title"><span>🧬</span> Inspecteur JSON Brut</h2>
+                  <p class="settings-card-desc">Visualisation directe de la structure mémoire interne du coordinateur DomoLink-Tado.</p>
+                </div>
+                <select class="form-select" id="devJsonFilterSelect" style="width: auto; min-width: 210px;">
+                  <option value="__ALL__">Tout le Snapshot DEV</option>
+                  <option value="rate_limit">rate_limit (En-têtes & Disjoncteur)</option>
+                  <option value="budget">budget (QuotaBudget & Âges Caches)</option>
+                  <option value="weather">weather (Solaire & Physique Ext.)</option>
+                  <option value="boiler_care">boiler_care (Minder & Ivar)</option>
+                  <option value="energy_insights">energy_insights (Économies & COP)</option>
+                  <option value="hops_actionable_devices">hops_actionable_devices</option>
+                  <option value="local_bridge">local_bridge (HomeKit / Matter LAN)</option>
+                  <option value="window_guard">window_guard (Épisodes actifs)</option>
+                  <option value="zones">zones (Liste complète)</option>
+                  <option value="devices">devices (Matériel GraphQL/REST)</option>
+                </select>
+              </div>
+              <pre class="dev-json-box" id="devJsonOutput">Chargement du snapshot...</pre>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- MODALE DETAIL PIECE AVEC CURSEUR VERTICAL SLIDER -->
@@ -2285,24 +2532,49 @@ class DomolinkTadoPanel extends HTMLElement {
     // Tabs Navigation
     const tabRooms = this.querySelector("#tabBtnRooms");
     const tabSettings = this.querySelector("#tabBtnSettings");
+    const tabDev = this.querySelector("#tabBtnDev");
     const viewRooms = this.querySelector("#viewRooms");
     const viewSettings = this.querySelector("#viewSettings");
+    const viewDev = this.querySelector("#viewDev");
 
-    tabRooms?.addEventListener("click", () => {
-      this._activeTab = "rooms";
-      tabRooms.classList.add("active");
-      tabSettings?.classList.remove("active");
-      viewRooms?.classList.add("active-view");
-      viewSettings?.classList.remove("active-view");
+    const switchTab = (target) => {
+      this._activeTab = target;
+      tabRooms?.classList.toggle("active", target === "rooms");
+      tabSettings?.classList.toggle("active", target === "settings");
+      tabDev?.classList.toggle("active", target === "dev");
+      viewRooms?.classList.toggle("active-view", target === "rooms");
+      viewSettings?.classList.toggle("active-view", target === "settings");
+      viewDev?.classList.toggle("active-view", target === "dev");
+      if (target === "settings") this._renderSettingsView();
+      if (target === "dev") this._fetchDevSnapshot();
+    };
+
+    tabRooms?.addEventListener("click", () => switchTab("rooms"));
+    tabSettings?.addEventListener("click", () => switchTab("settings"));
+    tabDev?.addEventListener("click", () => switchTab("dev"));
+
+    this.querySelector("#btnDevRefreshSnapshot")?.addEventListener("click", () => {
+      this._fetchDevSnapshot();
     });
 
-    tabSettings?.addEventListener("click", () => {
-      this._activeTab = "settings";
-      tabSettings.classList.add("active");
-      tabRooms?.classList.remove("active");
-      viewSettings?.classList.add("active-view");
-      viewRooms?.classList.remove("active-view");
-      this._renderSettingsView();
+    this.querySelector("#btnDevCopyJson")?.addEventListener("click", () => {
+      if (!this._devSnapshot) return;
+      const filterKey = this.querySelector("#devJsonFilterSelect")?.value || "__ALL__";
+      const payload = filterKey === "__ALL__" ? this._devSnapshot : (this._devSnapshot[filterKey] ?? {});
+      const txt = JSON.stringify(payload, null, 2);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(txt).then(() => {
+          const btn = this.querySelector("#btnDevCopyJson");
+          if (btn) {
+            btn.textContent = "✓ Copié !";
+            setTimeout(() => { btn.textContent = "📋 Copier JSON Brut"; }, 2000);
+          }
+        });
+      }
+    });
+
+    this.querySelector("#devJsonFilterSelect")?.addEventListener("change", () => {
+      this._renderDevJsonInspector();
     });
 
     this.querySelector("#apiQuotaBadge")?.addEventListener("click", () => {
@@ -3470,6 +3742,305 @@ class DomolinkTadoPanel extends HTMLElement {
         saveBtn.textContent = "💾 Sauvegarder les paramètres";
       }, 2500);
     }
+  }
+
+  async _fetchDevSnapshot() {
+    const syncEl = this.querySelector("#devLastSyncLabel");
+    if (syncEl) syncEl.textContent = "Chargement du snapshot mémoire Home Assistant...";
+    try {
+      if (this._hass && typeof this._hass.callWS === "function") {
+        const snap = await this._hass.callWS({ type: "domolink_tado/get_dev_snapshot" });
+        this._devSnapshot = snap || {};
+        if (syncEl) {
+          const ts = snap?.last_update ? new Date(snap.last_update).toLocaleTimeString("fr-FR") : new Date().toLocaleTimeString("fr-FR");
+          syncEl.textContent = `Snapshot mémoire synchronisé à ${ts} • 0 requête Cloud Tado consommée`;
+        }
+        this._renderDevView();
+      }
+    } catch (err) {
+      if (syncEl) syncEl.textContent = `Erreur lecture WebSocket DEV : ${err?.message || err}`;
+      // Fallback: build partial snapshot from HA states if WS unavailable
+      this._renderDevView();
+    }
+  }
+
+  _fmtAge(sec) {
+    if (sec === null || sec === undefined) return "Non chargé";
+    if (sec < 60) return `${sec}s`;
+    if (sec < 3600) return `${Math.floor(sec / 60)}min`;
+    return `${(sec / 3600).toFixed(1)}h`;
+  }
+
+  _renderDevJsonInspector() {
+    const pre = this.querySelector("#devJsonOutput");
+    if (!pre || !this._devSnapshot) return;
+    const filterKey = this.querySelector("#devJsonFilterSelect")?.value || "__ALL__";
+    const payload = filterKey === "__ALL__" ? this._devSnapshot : (this._devSnapshot[filterKey] ?? {});
+    pre.textContent = JSON.stringify(payload, null, 2);
+  }
+
+  _renderDevView() {
+    const snap = this._devSnapshot;
+    if (!snap) return;
+
+    // 1. Engine KPIs: QuotaBudget, Circuit Breaker, Pont Local, WindowGuard
+    const engineGrid = this.querySelector("#devEngineKpiGrid");
+    if (engineGrid) {
+      const rl = snap.rate_limit || {};
+      const b = snap.budget || {};
+      const lb = snap.local_bridge || {};
+      const wg = snap.window_guard || {};
+      const activeEps = Object.values(wg.active_episodes || {});
+      const mappedCount = Object.keys(lb.zones_mapped || {}).length;
+
+      engineGrid.innerHTML = `
+        <div class="dev-kpi-card">
+          <div class="dev-kpi-title">⚡ Quota & Palier (QuotaBudget)</div>
+          <div class="dev-kpi-val">${rl.remaining ?? "--"} <span style="font-size: 13px; color: #94a3b8;">/ ${rl.limit ?? "--"} req</span></div>
+          <div class="dev-kpi-sub">
+            Palier : <span class="dev-pill info">${b.tier || rl.tier || "UNKNOWN"}</span>
+            • Reset dans <b>${this._fmtAge(rl.seconds_to_reset ?? rl.reset_seconds)}</b><br/>
+            Polling : <b>${snap.update_interval_seconds ?? "--"}s</b> • Échecs : <b>${snap.consecutive_failures ?? 0}</b>
+          </div>
+        </div>
+
+        <div class="dev-kpi-card">
+          <div class="dev-kpi-title">🛡️ Gouvernance & Disjoncteur</div>
+          <div class="dev-kpi-val">${rl.circuit_breaker_active ? "🔴 DISJONCTEUR ACTIF" : "🟢 NOMINAL"}</div>
+          <div class="dev-kpi-sub">
+            Poll : <span class="dev-pill ${b.can_spend_poll ? "ok" : "bad"}">${b.can_spend_poll ? "OK" : "BLOQUÉ"}</span>
+            Bg : <span class="dev-pill ${b.can_spend_background ? "ok" : "warn"}">${b.can_spend_background ? "OK" : "ÉCO"}</span>
+            Cmd : <span class="dev-pill ${b.can_spend_command ? "ok" : "bad"}">${b.can_spend_command ? "OK" : "0"}</span><br/>
+            Âges : Disc. ${this._fmtAge(b.discovery_age_s)} • GQL ${this._fmtAge(b.graphql_age_s)} • Minder ${this._fmtAge(b.minder_age_s)}
+          </div>
+        </div>
+
+        <div class="dev-kpi-card">
+          <div class="dev-kpi-title">🏠 Pont Local LAN (0 Token Cloud)</div>
+          <div class="dev-kpi-val">${lb.active ? `🟢 ACTIF (${mappedCount} zones)` : "⚪ INACTIF"}</div>
+          <div class="dev-kpi-sub">
+            ${lb.active
+              ? `Bypass HomeKit/Matter prêt : ${Object.values(lb.zones_mapped || {}).slice(0, 3).join(", ")}${mappedCount > 3 ? "..." : ""}`
+              : "Aucune entité HomeKit Controller ou Matter Tado mappée sur le LAN."}
+          </div>
+        </div>
+
+        <div class="dev-kpi-card">
+          <div class="dev-kpi-title">🪟 WindowGuard (Événementiel)</div>
+          <div class="dev-kpi-val">${activeEps.length > 0 ? `💨 ${activeEps.length} Ouverture(s)` : "🔒 Toutes Fermées"}</div>
+          <div class="dev-kpi-sub">
+            ${activeEps.length > 0
+              ? activeEps.map((e) => `Zone ${e.zone_id} (${e.reason}, overlay=${e.we_own_overlay ? "oui" : "non"})`).join("<br/>")
+              : "0 appel Cloud au repos • Protection gel 30min active."}
+          </div>
+        </div>
+      `;
+    }
+
+    // 2. Microservices Cloud v10.9 & Solaire
+    const msGrid = this.querySelector("#devMicroservicesGrid");
+    if (msGrid) {
+      const bc = snap.boiler_care || {};
+      const ei = snap.energy_insights || {};
+      const w = snap.weather || {};
+      const incCount = (bc.incidents || []).length;
+      const hopsList = snap.hops_actionable_devices || [];
+
+      msGrid.innerHTML = `
+        <div class="dev-kpi-card">
+          <div class="dev-kpi-title">🔥 Boiler Care (Minder & Ivar)</div>
+          <div class="dev-kpi-val">${bc.daily_running_hours ?? 0}h <span style="font-size: 13px; color: #94a3b8;">(${bc.daily_running_seconds ?? 0}s)</span></div>
+          <div class="dev-kpi-sub">
+            Modèle Ivar : <b>${bc.boiler_model || (bc.boiler_id ? `ID ${bc.boiler_id}` : "N/A")}</b><br/>
+            Chaudière : <b>${bc.boiler_present ? "Oui" : "Non"}</b> • Plancher ch. : <b>${bc.underfloor_heating_present ? "Oui" : "Non"}</b><br/>
+            Incidents : <span class="dev-pill ${incCount > 0 ? "bad" : "ok"}">${incCount > 0 ? `${incCount} Alerte(s)` : "Aucun"}</span>
+          </div>
+        </div>
+
+        <div class="dev-kpi-card">
+          <div class="dev-kpi-title">🌿 Energy IQ & Économies</div>
+          <div class="dev-kpi-val">${ei.total_savings_percentage ?? 0}% <span style="font-size: 12px; color: #94a3b8;">ce mois</span></div>
+          <div class="dev-kpi-sub">
+            Auto-Assist : <span class="dev-pill ${ei.has_auto_assist ? "ok" : "info"}">${ei.has_auto_assist ? "Actif" : "Standard"}</span> • Fenêtres : <b>${ei.open_window_detections ?? 0}</b><br/>
+            Soleil : <b>${ei.sunshine_duration_hours ?? 0}h</b> • Absence : <b>${ei.away_duration_hours ?? 0}h</b> • Manuel : <b>${ei.manual_control_saving ?? 0}%</b>
+          </div>
+        </div>
+
+        <div class="dev-kpi-card">
+          <div class="dev-kpi-title">♨️ Pompe à Chaleur (COP)</div>
+          <div class="dev-kpi-val">${ei.cop_heating != null ? `COP ${ei.cop_heating}` : "N/A"}</div>
+          <div class="dev-kpi-sub">
+            Chauffage : <b>${ei.cop_heating ?? "--"}</b> • Eau Chaude (ECS) : <b>${ei.cop_dhw ?? "--"}</b><br/>
+            Hops à traiter : <span class="dev-pill ${hopsList.length > 0 ? "warn" : "ok"}">${hopsList.length} appareil(s)</span>
+          </div>
+        </div>
+
+        <div class="dev-kpi-card">
+          <div class="dev-kpi-title">☀️ Météo & Physique Extérieure</div>
+          <div class="dev-kpi-val">${w.solar_intensity ?? "--"}% <span style="font-size: 13px; color: #94a3b8;">solaire</span></div>
+          <div class="dev-kpi-sub">
+            État : <b>${w.weather_state || "--"}</b> • Ext. : <b>${w.outdoor_temperature ?? "--"}°C / ${w.outdoor_humidity ?? "--"}%</b><br/>
+            Rosée ext. : <b>${w.outdoor_dew_point ?? "--"}°C</b> • Hum. abs. : <b>${w.outdoor_absolute_humidity ?? "--"} g/m³</b>
+          </div>
+        </div>
+      `;
+
+      const hopsEl = this.querySelector("#devHopsAlertsContainer");
+      if (hopsEl) {
+        if (hopsList.length > 0 || (ei.open_window_advice || []).length > 0) {
+          hopsEl.innerHTML = `
+            <div style="background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.35); border-radius: 12px; padding: 12px; font-size: 12px; color: #fde68a;">
+              <b>⚠️ Alertes Hops & Conseils Cloud :</b>
+              ${hopsList.map((h) => `<span class="dev-pill warn" style="margin-left: 6px;">${h.serialNumber || h.id || "Appareil"}: ${JSON.stringify(h)}</span>`).join("")}
+              ${(ei.open_window_advice || []).map((a) => `<span class="dev-pill info" style="margin-left: 6px;">Conseil Fenêtre: ${a.id || "Actif"}</span>`).join("")}
+            </div>
+          `;
+        } else {
+          hopsEl.innerHTML = "";
+        }
+      }
+    }
+
+    // 3. Matrice Zones (Plannings, Physique, Pont LAN)
+    const zBody = this.querySelector("#devZonesTableBody");
+    if (zBody) {
+      zBody.innerHTML = (snap.zones || []).map((z) => {
+        const nsc = z.next_schedule_change;
+        const nscText = nsc
+          ? `${nsc.start ? new Date(nsc.start).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" }) : "--"} → <b>${nsc.setting?.power === "OFF" ? "OFF" : `${nsc.setting?.temperature?.celsius ?? "--"}°C`}</b>`
+          : "<span style='color:#64748b'>Aucun</span>";
+        const moldCls = z.mold_risk_problem ? "bad" : (z.mold_risk_level === "medium" ? "warn" : "ok");
+        const preheatText = z.preheat_advisor
+          ? `Départ ${new Date(z.preheat_advisor).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })} (${z.preheat_duration}m)`
+          : "Pas de préchauffe";
+
+        return `
+          <tr>
+            <td>
+              <b>${z.name || "Zone"}</b> <code style="color:#94a3b8">#${z.zone_id}</code><br/>
+              <span style="font-size:11px; color:#94a3b8;">${z.type || "HEATING"} • ${z.inside_temperature ?? "--"}°C / ${z.humidity ?? "--"}%</span>
+            </td>
+            <td>
+              <span class="dev-pill ${z.link_state === "ONLINE" ? "ok" : "warn"}">${z.link_state || "ONLINE"}</span>
+              ${z.preparation ? `<span class="dev-pill info">Préchauffe Tado</span>` : ""}<br/>
+              <span style="font-size:11px; color:#cbd5e1;">LAN : ${z.local_entity ? `<code>${z.local_entity}</code>` : "<span style='color:#64748b'>Cloud</span>"}</span>
+            </td>
+            <td>
+              ${nscText}<br/>
+              <span style="font-size:11px; color:#94a3b8;">EarlyStart: ${z.early_start_enabled ? "Oui" : "Non"}</span>
+            </td>
+            <td>
+              Rosée <b>${z.dew_point ?? "--"}°C</b> • Abs <b>${z.absolute_humidity ?? "--"} g/m³</b><br/>
+              Moisissure : <span class="dev-pill ${moldCls}">${z.mold_risk_level || "normal"}</span>
+              ${z.ventilation_recommended ? `<span class="dev-pill info">💨 Aérer</span>` : ""}
+            </td>
+            <td>
+              <b>${z.heating_rate != null ? `${Number(z.heating_rate).toFixed(2)} °C/h` : "--"}</b><br/>
+              <span style="font-size:11px; color:#cbd5e1;">${preheatText}</span>
+            </td>
+          </tr>
+        `;
+      }).join("");
+    }
+
+    // 4. Console Matériel Bas-Niveau GraphQL & Matter
+    const dBody = this.querySelector("#devDevicesTableBody");
+    if (dBody) {
+      dBody.innerHTML = (snap.devices || []).map((d) => `
+        <tr>
+          <td>
+            <b>${d.device_type || "Tado"}</b><br/>
+            <code>${d.serial}</code><br/>
+            <span style="font-size:11px; color:#94a3b8;">FW: <code>${d.firmware || "--"}</code> • Piles: <b>${d.battery_state || "--"}</b></span>
+          </td>
+          <td>
+            GQL ID : <code>${d.graphql_id || "N/A"}</code><br/>
+            <span class="dev-pill ${d.supports_identify ? "info" : ""}">LED: ${d.supports_identify ? "Oui" : "--"}</span>
+            <span class="dev-pill ${d.dazzle_enabled ? "ok" : ""}">Dazzle: ${d.dazzle_enabled === true ? "ON" : (d.dazzle_enabled === false ? "OFF" : "--")}</span>
+          </td>
+          <td>
+            Signal : <span class="dev-pill ${d.has_bad_signal ? "bad" : "ok"}">${d.has_bad_signal ? "Faible !" : "Bon"}</span>
+            Montage : <b>${d.mounting_state || "--"}</b><br/>
+            Offset : <b>${d.mounted_offset != null ? `${d.mounted_offset}°C` : "--"}</b><br/>
+            <span style="font-size:10px; color:#64748b;">Contact : ${d.connection_timestamp ? new Date(d.connection_timestamp).toLocaleString("fr-FR") : "--"}</span>
+          </td>
+          <td style="font-size:11px;">
+            Control : <code>${d.control_mode || "--"}</code><br/>
+            Relay : <code>${d.relay_mode || "--"}</code><br/>
+            Interface : <code>${d.therm_interface_type || "--"}</code>
+          </td>
+          <td>
+            <div style="display:flex; flex-wrap:wrap; gap:6px;">
+              <button class="dev-btn dev-mini-btn btn-dev-identify" data-serial="${d.serial}" title="Faire clignoter l'écran LED (1 req)">💡 LED</button>
+              <button class="dev-btn dev-btn-warn dev-mini-btn btn-dev-reboot" data-serial="${d.serial}" title="Redémarrer l'appareil (1 req)">🔄 Reboot</button>
+              <button class="dev-btn dev-mini-btn btn-dev-dazzle" data-serial="${d.serial}" data-enabled="${d.dazzle_enabled ? "true" : "false"}" title="Basculer Dazzle">🌓 Dazzle</button>
+              <button class="dev-btn dev-btn-ok dev-mini-btn btn-dev-matter" data-serial="${d.serial}" title="Lire Passcode & Discriminator Matter (Tado X)">🔑 Matter</button>
+            </div>
+          </td>
+        </tr>
+      `).join("");
+
+      dBody.querySelectorAll(".btn-dev-identify").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const serial = btn.dataset.serial;
+          this._callService("domolink_tado", "identify_device", { device_serial: serial });
+          btn.textContent = "✨ Clignote...";
+          setTimeout(() => { btn.textContent = "💡 LED"; }, 2500);
+        });
+      });
+
+      dBody.querySelectorAll(".btn-dev-reboot").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const serial = btn.dataset.serial;
+          this._callService("domolink_tado", "reboot_device", { device_serial: serial });
+          btn.textContent = "⏳ Envoyé";
+          setTimeout(() => { btn.textContent = "🔄 Reboot"; }, 2500);
+        });
+      });
+
+      dBody.querySelectorAll(".btn-dev-dazzle").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const serial = btn.dataset.serial;
+          const currentlyEnabled = btn.dataset.enabled === "true";
+          this._callService("domolink_tado", "set_device_dazzle", {
+            device_serial: serial,
+            enabled: !currentlyEnabled,
+          });
+          btn.textContent = !currentlyEnabled ? "🌓 ON" : "🌓 OFF";
+          btn.dataset.enabled = !currentlyEnabled ? "true" : "false";
+        });
+      });
+
+      dBody.querySelectorAll(".btn-dev-matter").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const serial = btn.dataset.serial;
+          const banner = this.querySelector("#devMatterSecretBanner");
+          if (banner) {
+            banner.innerHTML = `<div class="dev-pill info">Interrogation GraphQL Matter pour ${serial}...</div>`;
+          }
+          try {
+            const res = await this._hass.callWS({
+              type: "domolink_tado/get_matter_provisioning",
+              device_serial: serial,
+            });
+            if (banner) {
+              if (res && (res.passcode || res.discriminator)) {
+                banner.innerHTML = `<div class="dev-pill ok" style="padding: 8px 14px; font-size: 13px;">🔑 Matter (${serial}) — Passcode : <b>${res.passcode}</b> • Discriminator : <b>${res.discriminator}</b></div>`;
+              } else {
+                banner.innerHTML = `<div class="dev-pill warn" style="padding: 8px 14px;">ℹ️ ${serial} ne retourne pas de données Matter Provisioning (appareil V3/V3+ ou non Tado X).</div>`;
+              }
+            }
+          } catch (err) {
+            if (banner) {
+              banner.innerHTML = `<div class="dev-pill bad">Erreur Matter ${serial} : ${err?.message || err}</div>`;
+            }
+          }
+        });
+      });
+    }
+
+    // 5. Raw JSON Inspector
+    this._renderDevJsonInspector();
   }
 }
 
