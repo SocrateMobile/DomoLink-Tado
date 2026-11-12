@@ -221,19 +221,24 @@ class TestLocalBridgeManager(unittest.IsolatedAsyncioTestCase):
     """Test suite for Local Bridge Bypass & Auto-pairing."""
 
     async def test_local_bridge_discovery_and_commands(self) -> None:
-        hass = MagicMock()
+        hass = MagicMock(spec=["states", "services", "config_entries", "data"])
         coordinator = MagicMock()
         coordinator.data = {
             "zones": {1: {"name": "Salon", "id": 1}},
             "devices": {"VA123": {"serialNo": "VA123", "zoneId": 1}}
         }
 
-        # Mock HA climate entities
+        # Mock HA climate entities (including own domolink_tado entity that MUST be ignored)
+        state_own = MagicMock()
+        state_own.entity_id = "climate.salon_tado"
+        state_own.state = "heat"
+        state_own.attributes = {"friendly_name": "Salon", "integration": "domolink_tado"}
+
         state_salon = MagicMock()
         state_salon.entity_id = "climate.salon_homekit"
         state_salon.state = "heat"
         state_salon.attributes = {"friendly_name": "Salon"}
-        hass.states.async_all.return_value = [state_salon]
+        hass.states.async_all.return_value = [state_own, state_salon]
         hass.states.get.return_value = state_salon
 
         lbm = LocalBridgeManager(hass, coordinator)
