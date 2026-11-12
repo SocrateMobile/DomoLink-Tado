@@ -710,6 +710,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         boiler_info = hsys_dict.get("boiler") or {}
                         boiler_present = bool(boiler_info.get("present") or boiler_info.get("found"))
                         boiler_id = boiler_info.get("id")
+                        underfloor_heating = bool((hsys_dict.get("underfloorHeating") or {}).get("present"))
 
                         boiler_model = ""
                         if boiler_id and not self._boiler_system_details:
@@ -728,10 +729,11 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                         daily_seconds = 0
                         summary = rtimes_dict.get("summary") or {}
+                        running_list = rtimes_dict.get("runningTimes") if isinstance(rtimes_dict.get("runningTimes"), list) else []
                         if isinstance(summary, dict) and "duration" in summary:
                             daily_seconds = int(summary.get("duration") or 0)
-                        elif "runningTimes" in rtimes_dict and isinstance(rtimes_dict["runningTimes"], list):
-                            for rt in rtimes_dict["runningTimes"]:
+                        elif running_list:
+                            for rt in running_list:
                                 dur = rt.get("duration")
                                 if dur:
                                     daily_seconds += int(dur)
@@ -740,10 +742,12 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             "boiler_present": boiler_present,
                             "boiler_id": boiler_id,
                             "boiler_model": boiler_model,
+                            "underfloor_heating_present": underfloor_heating,
                             "incidents": incidents_list,
                             "has_active_incident": len(incidents_list) > 0,
                             "daily_running_seconds": daily_seconds,
                             "daily_running_hours": round(daily_seconds / 3600.0, 2),
+                            "running_times_detail": running_list,
                         }
                         self._minder_last_update = now
                     except Exception as err:
@@ -767,6 +771,7 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                         sunshine_dur = (es.get("sunshineDuration") or {}).get("duration", 0.0) if isinstance(es, dict) else 0.0
                         away_dur = (es.get("awayDuration") or {}).get("duration", 0.0) if isinstance(es, dict) else 0.0
                         manual_saving = (es.get("manualControlSaving") or {}).get("percentage", 0.0) if isinstance(es, dict) else 0.0
+                        has_auto_assist = bool(es.get("hasAutoAssist")) if isinstance(es, dict) else False
 
                         hp = insights.get("heatPump") or {}
                         cop_data = (hp.get("consumption") or {}).get("cop") or {}
@@ -775,10 +780,15 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                         notifications = insights.get("notifications") or []
                         mold_rooms: list[int] = []
+                        open_window_advice: list[dict[str, Any]] = []
                         for n in notifications:
-                            if isinstance(n, dict) and n.get("type") == "MOLD_INDEX":
+                            if not isinstance(n, dict):
+                                continue
+                            if n.get("type") == "MOLD_INDEX":
                                 r_ids = n.get("roomIds") or []
                                 mold_rooms.extend([int(r) for r in r_ids if str(r).isdigit()])
+                            elif n.get("type") == "OPEN_WINDOW_DETECTION_SAVINGS_ADVICE":
+                                open_window_advice.append(n)
 
                         self._energy_insights_cache = {
                             "total_savings_percentage": float(total_savings) if total_savings is not None else 0.0,
@@ -786,9 +796,11 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             "sunshine_duration_hours": round(float(sunshine_dur) / 3600.0, 1) if float(sunshine_dur) > 100 else float(sunshine_dur),
                             "away_duration_hours": round(float(away_dur) / 3600.0, 1) if float(away_dur) > 100 else float(away_dur),
                             "manual_control_saving": float(manual_saving) if manual_saving is not None else 0.0,
+                            "has_auto_assist": has_auto_assist,
                             "cop_heating": float(cop_heating) if cop_heating is not None else None,
                             "cop_dhw": float(cop_dhw) if cop_dhw is not None else None,
                             "mold_risk_room_ids": list(set(mold_rooms)),
+                            "open_window_advice": open_window_advice,
                             "actionable_devices": hops_list,
                         }
                         self._energy_insights_last_update = now
@@ -1189,6 +1201,12 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "mold_risk_level": mold_risk_level,
                     "mold_risk_problem": mold_risk_problem,
                     "ventilation_recommended": ventilation_recommended,
+                    "link_state": (z_state.get("link") or {}).get("state", "ONLINE"),
+                    "next_schedule_change": z_state.get("nextScheduleChange"),
+                    "next_time_block": z_state.get("nextTimeBlock"),
+                    "preparation": z_state.get("preparation"),
+                    "dazzle_supported": bool(z.get("supportsDazzle", False)),
+                    "early_start_enabled": bool(z.get("earlyStart", False)),
                     "devices": enhanced_devices,
                     "labels": room_labels,
                 }
@@ -1979,5 +1997,137 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_pair_local_bridge(self, pin: str) -> dict[str, Any]:
         """Pair Tado Internet Bridge via HomeKit Controller locally."""
         return await self.local_bridge.async_pair_homekit_bridge(pin)
+
+    async def async_set_relay_mode(self, serial_or_id: str, relay_mode: str) -> dict[str, Any]:
+        """Configure relay operating mode on boiler interface via GraphQL."""
+        dev_id = self._resolve_graphql_device_id(serial_or_id)
+        budget = getattr(self.client, "budget", None)
+        if budget and not budget.can_spend("command"):
+            return {"success": False, "failureReason": "QUOTA_EXHAUSTED"}
+        res = await self.client.set_relay_mode(dev_id, relay_mode)
+        if res.get("success"):
+            if serial_or_id in self._graphql_devices_cache:
+                self._graphql_devices_cache[serial_or_id]["relayMode"] = relay_mode
+            if self.data and "devices" in self.data and serial_or_id in self.data["devices"]:
+                self.data["devices"][serial_or_id]["relayMode"] = relay_mode
+                self.async_set_updated_data(self.data)
+        return res
+
+    async def async_get_matter_provisioning(self, serial_or_id: str) -> dict[str, Any]:
+        """Retrieve Matter pairing passcode and discriminator on demand (1 API call)."""
+        dev_id = self._resolve_graphql_device_id(serial_or_id)
+        return await self.client.get_matter_provisioning(self.home_id, dev_id)
+
+    def get_dev_snapshot(self) -> dict[str, Any]:
+        """Return complete zero-cloud-cost snapshot of all cached Tado telemetry for the DEV Cockpit."""
+        now = time.time()
+        data = self.data or {}
+        budget = getattr(self.client, "budget", None)
+
+        wg_episodes: dict[str, Any] = {}
+        if self.window_guard and hasattr(self.window_guard, "_episodes"):
+            for zid, ep in self.window_guard._episodes.items():
+                wg_episodes[str(zid)] = {
+                    "zone_id": zid,
+                    "state": getattr(ep, "state", None),
+                    "reason": getattr(ep, "reason", None),
+                    "started_at": getattr(ep, "started_at", None),
+                    "we_own_overlay": getattr(ep, "we_own_overlay", False),
+                }
+
+        zones_list: list[dict[str, Any]] = []
+        for zid, z in (data.get("zones") or {}).items():
+            zones_list.append({
+                "zone_id": zid,
+                "name": z.get("name"),
+                "type": z.get("type"),
+                "inside_temperature": z.get("inside_temperature"),
+                "raw_inside_temperature": z.get("raw_inside_temperature"),
+                "is_external_temp": z.get("is_external_temp", False),
+                "humidity": z.get("humidity"),
+                "raw_humidity": z.get("raw_humidity"),
+                "is_external_humidity": z.get("is_external_humidity", False),
+                "target_temperature": z.get("target_temperature"),
+                "power": z.get("power"),
+                "heating_power": z.get("heating_power", 0.0),
+                "is_overlay_active": z.get("is_overlay_active", False),
+                "open_window": z.get("open_window"),
+                "rapid_window_drop": z.get("rapid_window_drop", False),
+                "link_state": z.get("link_state", (z.get("state") or {}).get("link", {}).get("state")),
+                "next_schedule_change": z.get("next_schedule_change") or (z.get("state") or {}).get("nextScheduleChange"),
+                "next_time_block": z.get("next_time_block") or (z.get("state") or {}).get("nextTimeBlock"),
+                "preparation": z.get("preparation") or (z.get("state") or {}).get("preparation"),
+                "dazzle_supported": z.get("dazzle_supported", False),
+                "early_start_enabled": z.get("early_start_enabled", False),
+                "dew_point": z.get("dew_point"),
+                "absolute_humidity": z.get("absolute_humidity"),
+                "mold_risk_level": z.get("mold_risk_level"),
+                "mold_risk_problem": z.get("mold_risk_problem", False),
+                "ventilation_recommended": z.get("ventilation_recommended", False),
+                "heating_rate": z.get("heating_rate"),
+                "preheat_advisor": z.get("preheat_advisor"),
+                "preheat_duration": z.get("preheat_duration", 0),
+                "preheat_now": z.get("preheat_now", False),
+                "local_entity": self.local_bridge._zone_to_local_entity.get(zid),
+            })
+
+        devices_list: list[dict[str, Any]] = []
+        for serial, d in (data.get("devices") or {}).items():
+            conn = d.get("connectionState") or {}
+            mount = d.get("mountingState") or {}
+            offset = d.get("currentMountedOffset") or (d.get("characteristics") or {}).get("temperatureOffset") or {}
+            devices_list.append({
+                "serial": serial,
+                "device_type": d.get("deviceType"),
+                "graphql_id": d.get("graphql_id"),
+                "firmware": d.get("currentFirmwareVersion"),
+                "battery_state": d.get("batteryState"),
+                "child_lock": d.get("childLockEnabled"),
+                "connected": conn.get("value", True) if isinstance(conn, dict) else bool(conn),
+                "connection_timestamp": conn.get("timestamp") if isinstance(conn, dict) else None,
+                "has_bad_signal": d.get("hasBadSignal", False),
+                "dazzle_enabled": d.get("dazzleEnabled"),
+                "supports_identify": d.get("supportsIdentify"),
+                "control_mode": d.get("controlMode"),
+                "relay_mode": d.get("relayMode"),
+                "therm_interface_type": d.get("thermInterfaceType"),
+                "mounted_offset": offset.get("celsius") if isinstance(offset, dict) else None,
+                "mounting_state": mount.get("value") if isinstance(mount, dict) else None,
+                "zone_id": d.get("zoneId"),
+            })
+
+        return {
+            "home_id": self.home_id,
+            "home_name": self.home_name,
+            "last_update": data.get("last_update"),
+            "update_interval_seconds": int(self.update_interval.total_seconds()) if self.update_interval else None,
+            "consecutive_failures": self._consecutive_failures,
+            "rate_limit": self.client.rate_limit_info,
+            "budget": {
+                "tier": getattr(budget, "tier", "UNKNOWN") if budget else "UNKNOWN",
+                "can_spend_poll": budget.can_spend("poll") if budget else True,
+                "can_spend_background": budget.can_spend("background") if budget else True,
+                "can_spend_command": budget.can_spend("command") if budget else True,
+                "discovery_age_s": round(now - self._last_discovery_time) if self._last_discovery_time else None,
+                "graphql_age_s": round(now - self._graphql_devices_last_update) if self._graphql_devices_last_update else None,
+                "minder_age_s": round(now - self._minder_last_update) if self._minder_last_update else None,
+                "insights_age_s": round(now - self._energy_insights_last_update) if self._energy_insights_last_update else None,
+            },
+            "weather": data.get("weather") or {},
+            "presence": data.get("presence"),
+            "boiler_care": data.get("boiler_care") or {},
+            "energy_insights": data.get("energy_insights") or {},
+            "hops_actionable_devices": (data.get("energy_insights") or {}).get("actionable_devices", []),
+            "local_bridge": {
+                "active": self.local_bridge.has_local_entities,
+                "zones_mapped": {str(k): v for k, v in self.local_bridge._zone_to_local_entity.items()},
+                "serials_mapped": dict(self.local_bridge._serial_to_local_entity),
+            },
+            "window_guard": {
+                "active_episodes": wg_episodes,
+            },
+            "zones": zones_list,
+            "devices": devices_list,
+        }
 
 

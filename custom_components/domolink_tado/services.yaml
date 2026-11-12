@@ -225,6 +225,23 @@ pair_local_bridge:
       selector:
         text:
 
+set_relay_mode:
+  name: Configurer le mode relais chaudière
+  description: Configure le mode de commande relais bas niveau d'une interface chaudière Tado via GraphQL.
+  fields:
+    device_serial:
+      name: Numéro de série de l'appareil
+      description: Numéro de série de l'équipement ou interface chaudière.
+      required: true
+      selector:
+        text:
+    relay_mode:
+      name: Mode Relais
+      description: Mode de fonctionnement du relais chaudière.
+      required: true
+      selector:
+        text:
+
 
 
 

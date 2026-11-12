@@ -264,6 +264,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if pin:
             await coordinator.async_pair_local_bridge(str(pin))
 
+    async def handle_set_relay_mode(call: ServiceCall) -> None:
+        """Configurer le mode relais d'une interface chaudière Tado."""
+        serial = call.data.get("device_serial")
+        relay_mode = call.data.get("relay_mode")
+        if serial and relay_mode:
+            await coordinator.async_set_relay_mode(serial, relay_mode)
+
     async def handle_reauthenticate(call: ServiceCall) -> None:
         """Déclencher la ré-authentification Device Flow."""
         _LOGGER.info("DomoLink-Tado: Lancement du flux de ré-authentification...")
@@ -307,8 +314,56 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_register(DOMAIN, "set_device_dazzle", handle_set_device_dazzle)
     if not hass.services.has_service(DOMAIN, "pair_local_bridge"):
         async_register_admin_service(hass, DOMAIN, "pair_local_bridge", handle_pair_local_bridge)
+    if not hass.services.has_service(DOMAIN, "set_relay_mode"):
+        async_register_admin_service(hass, DOMAIN, "set_relay_mode", handle_set_relay_mode)
     if not hass.services.has_service(DOMAIN, "reauthenticate"):
         async_register_admin_service(hass, DOMAIN, "reauthenticate", handle_reauthenticate)
+
+    # 4. Commandes WebSocket pour le Cockpit DEV (0 coût API Cloud)
+    try:
+        import voluptuous as vol
+        from homeassistant.components import websocket_api
+
+        @websocket_api.websocket_command({
+            vol.Required("type"): f"{DOMAIN}/get_dev_snapshot",
+        })
+        @websocket_api.async_response
+        async def ws_get_dev_snapshot(
+            hass_ws: HomeAssistant,
+            connection: Any,
+            msg: dict[str, Any],
+        ) -> None:
+            """Return complete zero-cloud telemetry snapshot from memory."""
+            snapshots = []
+            for edata in (hass_ws.data.get(DOMAIN) or {}).values():
+                if isinstance(edata, dict) and "coordinator" in edata:
+                    snapshots.append(edata["coordinator"].get_dev_snapshot())
+            connection.send_result(msg["id"], snapshots[0] if snapshots else {})
+
+        @websocket_api.websocket_command({
+            vol.Required("type"): f"{DOMAIN}/get_matter_provisioning",
+            vol.Required("device_serial"): str,
+        })
+        @websocket_api.async_response
+        async def ws_get_matter_provisioning(
+            hass_ws: HomeAssistant,
+            connection: Any,
+            msg: dict[str, Any],
+        ) -> None:
+            """Fetch Matter passcode & discriminator on user demand."""
+            for edata in (hass_ws.data.get(DOMAIN) or {}).values():
+                if isinstance(edata, dict) and "coordinator" in edata:
+                    res = await edata["coordinator"].async_get_matter_provisioning(msg["device_serial"])
+                    connection.send_result(msg["id"], res)
+                    return
+            connection.send_result(msg["id"], {})
+
+        if not hass.data[DOMAIN].get("_ws_registered"):
+            websocket_api.async_register_command(hass, ws_get_dev_snapshot)
+            websocket_api.async_register_command(hass, ws_get_matter_provisioning)
+            hass.data[DOMAIN]["_ws_registered"] = True
+    except Exception as ws_err:
+        _LOGGER.debug("DomoLink-Tado: Commandes WebSocket DEV ignorées: %s", ws_err)
 
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
     return True
