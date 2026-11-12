@@ -2091,6 +2091,56 @@ class DomolinkTadoPanel extends HTMLElement {
               </div>
             </div>
 
+            <!-- Carte 0 ter : Connexion Locale Sans Cloud (HomeKit LAN & Matter) -->
+            <div class="settings-card" id="localBridgeSettingsCard">
+              <div class="settings-card-header">
+                <div>
+                  <h2 class="settings-card-title"><span>🏠</span> Connexion Locale Sans Cloud (HomeKit LAN & Matter)</h2>
+                  <p class="settings-card-desc">Associez votre pont Tado V3/V3+ en HomeKit ou vos têtes Tado X en Matter pour piloter vos radiateurs localement avec 0 jeton Cloud.</p>
+                </div>
+                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                  <span id="localBridgeStatusPill" class="tado-badge-pill" style="background: rgba(148, 163, 184, 0.15); color: #cbd5e1; border-color: rgba(148, 163, 184, 0.3);">
+                    ⚪ Vérification...
+                  </span>
+                  <button class="dev-btn" id="btnScanLocalBridge">🔍 Scanner Réseau Local (0 Token)</button>
+                </div>
+              </div>
+
+              <div id="localBridgeDiscoveryInfo" style="font-size: 12px; color: #94a3b8; margin-bottom: 14px; line-height: 1.5;"></div>
+
+              <div class="settings-grid-form" style="gap: 16px;">
+                <!-- HomeKit Pairing -->
+                <div style="background: rgba(15, 23, 42, 0.65); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px;">
+                  <div style="font-weight: 800; font-size: 14px; color: #f8fafc;">🍏 HomeKit Local (Bridge V3 / V3+)</div>
+                  <div style="font-size: 12px; color: #94a3b8; line-height: 1.4;">
+                    Saisissez le code PIN HomeKit à 8 chiffres imprimé sous votre Internet Bridge Tado (format <code>XXX-XX-XXX</code>).
+                  </div>
+                  <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <input type="text" class="form-input" id="inputHomekitPin" placeholder="Ex: 123-45-678" style="flex: 1; min-width: 150px;" />
+                    <button class="btn-save-all" id="btnPairHomekit" style="margin: 0; padding: 10px 18px; font-size: 13px; background: linear-gradient(135deg, #0ea5e9, #2563eb);">
+                      🔗 Connecter HomeKit
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Matter Pairing -->
+                <div style="background: rgba(15, 23, 42, 0.65); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 14px; padding: 16px; display: flex; flex-direction: column; gap: 10px;">
+                  <div style="font-weight: 800; font-size: 14px; color: #f8fafc;">🌐 Matter Local (Tado X)</div>
+                  <div style="font-size: 12px; color: #94a3b8; line-height: 1.4;">
+                    Saisissez le code d'appairage Matter à 11 ou 21 chiffres (ou récupérez le passcode secret depuis l'onglet <b>🛠️ DEV</b>).
+                  </div>
+                  <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                    <input type="text" class="form-input" id="inputMatterCode" placeholder="Code Matter (11/21 chiffres)" style="flex: 1; min-width: 150px;" />
+                    <button class="btn-save-all" id="btnPairMatter" style="margin: 0; padding: 10px 18px; font-size: 13px; background: linear-gradient(135deg, #10b981, #059669);">
+                      🔗 Connecter Matter
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div id="localBridgeActionResult" style="margin-top: 12px; font-size: 13px;"></div>
+            </div>
+
             <!-- Carte 0 bis : Quota & Télémétrie API Tado -->
             <div class="settings-card" id="quotaSettingsCard">
               <div class="settings-card-header">
@@ -2279,6 +2329,7 @@ class DomolinkTadoPanel extends HTMLElement {
               </div>
               <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                 <button class="dev-btn" id="btnDevRefreshSnapshot">🔄 Actualiser Snapshot Local (0 Token)</button>
+                <button class="dev-btn dev-btn-warn" id="btnDevOpenLocalPairing">🔗 Connexion HomeKit / Matter</button>
                 <button class="dev-btn dev-btn-ok" id="btnDevCopyJson">📋 Copier JSON Brut</button>
               </div>
             </div>
@@ -2545,13 +2596,75 @@ class DomolinkTadoPanel extends HTMLElement {
       viewRooms?.classList.toggle("active-view", target === "rooms");
       viewSettings?.classList.toggle("active-view", target === "settings");
       viewDev?.classList.toggle("active-view", target === "dev");
-      if (target === "settings") this._renderSettingsView();
+      if (target === "settings") {
+        this._renderSettingsView();
+        this._refreshLocalBridgeCard();
+      }
       if (target === "dev") this._fetchDevSnapshot();
     };
 
     tabRooms?.addEventListener("click", () => switchTab("rooms"));
     tabSettings?.addEventListener("click", () => switchTab("settings"));
     tabDev?.addEventListener("click", () => switchTab("dev"));
+
+    this.querySelector("#btnDevOpenLocalPairing")?.addEventListener("click", () => {
+      switchTab("settings");
+      setTimeout(() => {
+        this.querySelector("#localBridgeSettingsCard")?.scrollIntoView({ behavior: "smooth" });
+      }, 60);
+    });
+
+    this.querySelector("#btnScanLocalBridge")?.addEventListener("click", async () => {
+      const resultEl = this.querySelector("#localBridgeActionResult");
+      if (resultEl) resultEl.innerHTML = `<span class="dev-pill info">🔍 Scan du réseau local en cours...</span>`;
+      try {
+        const status = await this._hass.callWS({ type: "domolink_tado/scan_local_bridge" });
+        this._applyLocalBridgeStatus(status);
+        if (resultEl) {
+          resultEl.innerHTML = `<span class="dev-pill ok">✓ Scan terminé : ${status?.mapped_count || 0} zone(s) mappée(s) en local.</span>`;
+        }
+      } catch (err) {
+        if (resultEl) resultEl.innerHTML = `<span class="dev-pill bad">Erreur scan : ${err?.message || err}</span>`;
+      }
+    });
+
+    this.querySelector("#btnPairHomekit")?.addEventListener("click", async () => {
+      const pin = this.querySelector("#inputHomekitPin")?.value?.trim();
+      const resultEl = this.querySelector("#localBridgeActionResult");
+      if (!pin) {
+        if (resultEl) resultEl.innerHTML = `<span class="dev-pill warn">Veuillez saisir le code PIN HomeKit à 8 chiffres (XXX-XX-XXX).</span>`;
+        return;
+      }
+      if (resultEl) resultEl.innerHTML = `<span class="dev-pill info">🍏 Appairage HomeKit Controller en cours...</span>`;
+      try {
+        const res = await this._hass.callWS({ type: "domolink_tado/pair_local_bridge", pin });
+        if (resultEl) {
+          resultEl.innerHTML = `<span class="dev-pill ${res?.success ? "ok" : "warn"}">${res?.message || (res?.success ? "Succès !" : "Échec appairage.")}</span>`;
+        }
+        this._refreshLocalBridgeCard();
+      } catch (err) {
+        if (resultEl) resultEl.innerHTML = `<span class="dev-pill bad">Erreur HomeKit : ${err?.message || err}</span>`;
+      }
+    });
+
+    this.querySelector("#btnPairMatter")?.addEventListener("click", async () => {
+      const code = this.querySelector("#inputMatterCode")?.value?.trim();
+      const resultEl = this.querySelector("#localBridgeActionResult");
+      if (!code) {
+        if (resultEl) resultEl.innerHTML = `<span class="dev-pill warn">Veuillez saisir le code d'appairage Matter (11 ou 21 chiffres).</span>`;
+        return;
+      }
+      if (resultEl) resultEl.innerHTML = `<span class="dev-pill info">🌐 Commissioning Matter local en cours...</span>`;
+      try {
+        const res = await this._hass.callWS({ type: "domolink_tado/pair_matter", code });
+        if (resultEl) {
+          resultEl.innerHTML = `<span class="dev-pill ${res?.success ? "ok" : "warn"}">${res?.message || (res?.success ? "Succès !" : "Échec commissioning.")}</span>`;
+        }
+        this._refreshLocalBridgeCard();
+      } catch (err) {
+        if (resultEl) resultEl.innerHTML = `<span class="dev-pill bad">Erreur Matter : ${err?.message || err}</span>`;
+      }
+    });
 
     this.querySelector("#btnDevRefreshSnapshot")?.addEventListener("click", () => {
       this._fetchDevSnapshot();
@@ -3741,6 +3854,46 @@ class DomolinkTadoPanel extends HTMLElement {
       setTimeout(() => {
         saveBtn.textContent = "💾 Sauvegarder les paramètres";
       }, 2500);
+    }
+  }
+
+  async _refreshLocalBridgeCard() {
+    try {
+      if (this._hass && typeof this._hass.callWS === "function") {
+        const snap = await this._hass.callWS({ type: "domolink_tado/get_dev_snapshot" });
+        const discovery = snap?.local_bridge?.discovery;
+        if (discovery) {
+          this._applyLocalBridgeStatus(discovery);
+        }
+      }
+    } catch (_) {}
+  }
+
+  _applyLocalBridgeStatus(st) {
+    const pill = this.querySelector("#localBridgeStatusPill");
+    const info = this.querySelector("#localBridgeDiscoveryInfo");
+    if (pill) {
+      const cnt = st?.mapped_count || 0;
+      if (cnt > 0) {
+        pill.textContent = `🟢 Actif (${cnt} zone(s) en LAN)`;
+        pill.style.background = "rgba(16, 185, 129, 0.15)";
+        pill.style.color = "#4ade80";
+        pill.style.borderColor = "rgba(16, 185, 129, 0.35)";
+      } else {
+        pill.textContent = "⚪ Non mappé (Cloud)";
+        pill.style.background = "rgba(148, 163, 184, 0.15)";
+        pill.style.color = "#cbd5e1";
+        pill.style.borderColor = "rgba(148, 163, 184, 0.3)";
+      }
+    }
+    if (info && st) {
+      const hkList = (st.homekit_entries || []).map((e) => e.title).join(", ") || "Aucune";
+      const matterList = (st.matter_entries || []).map((e) => e.title).join(", ") || "Aucune";
+      const pendHk = (st.pending_homekit_flows || []).map((f) => f.title).join(", ") || "Aucun";
+      info.innerHTML = `
+        Intégrations HomeKit actives : <b>${hkList}</b> • Intégrations Matter : <b>${matterList}</b><br/>
+        Ponts en attente d'appairage détectés sur le LAN : <b style="color:#38bdf8;">${pendHk}</b>
+      `;
     }
   }
 

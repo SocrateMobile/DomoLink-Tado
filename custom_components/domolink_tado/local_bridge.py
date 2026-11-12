@@ -165,6 +165,43 @@ class LocalBridgeManager:
             _LOGGER.warning("DomoLink-Tado: Échec allumage local sur %s: %s", ent_id, err)
             return False
 
+    def get_discovery_status(self) -> dict[str, Any]:
+        """Inspect HomeKit Controller and Matter entries & pending flows in HA."""
+        hk_entries = []
+        matter_entries = []
+        pending_hk = []
+        pending_matter = []
+        try:
+            for ce in self.hass.config_entries.async_entries("homekit_controller"):
+                hk_entries.append({"entry_id": ce.entry_id, "title": ce.title})
+        except Exception:
+            pass
+        try:
+            for ce in self.hass.config_entries.async_entries("matter"):
+                matter_entries.append({"entry_id": ce.entry_id, "title": ce.title})
+        except Exception:
+            pass
+        try:
+            for fl in self.hass.config_entries.flow.async_progress():
+                handler = fl.get("handler")
+                ctx = fl.get("context", {})
+                title = (ctx.get("title_placeholders") or {}).get("name") or ctx.get("title") or handler
+                if handler == "homekit_controller":
+                    pending_hk.append({"flow_id": fl.get("flow_id"), "title": title})
+                elif handler == "matter":
+                    pending_matter.append({"flow_id": fl.get("flow_id"), "title": title})
+        except Exception:
+            pass
+
+        return {
+            "homekit_entries": hk_entries,
+            "matter_entries": matter_entries,
+            "pending_homekit_flows": pending_hk,
+            "pending_matter_flows": pending_matter,
+            "mapped_count": len(self._zone_to_local_entity),
+            "mapped_zones": {str(k): v for k, v in self._zone_to_local_entity.items()},
+        }
+
     async def async_pair_homekit_bridge(self, pin: str) -> dict[str, Any]:
         """Automatically pair the Tado Internet Bridge in HomeKit Controller using the provided PIN."""
         clean_pin = pin.strip().replace(" ", "").replace("-", "")
@@ -173,18 +210,22 @@ class LocalBridgeManager:
         else:
             formatted_pin = pin.strip()
 
+        if not formatted_pin:
+            return {"success": False, "message": "Veuillez saisir le code PIN HomeKit à 8 chiffres (XXX-XX-XXX)."}
+
         _LOGGER.info("DomoLink-Tado: Tentative d'appairage HomeKit automatique du pont Tado...")
         try:
-            # Check existing config flows in progress for homekit_controller
             flows = self.hass.config_entries.flow.async_progress()
+            hk_flows = [fl for fl in flows if fl.get("handler") == "homekit_controller"]
             tado_flow = None
-            for fl in flows:
-                if fl.get("handler") == "homekit_controller":
-                    ctx = fl.get("context", {})
-                    title = ctx.get("title_placeholders", {}).get("name", "").lower()
-                    if "tado" in title or "bridge" in title or "ib" in title:
-                        tado_flow = fl
-                        break
+            for fl in hk_flows:
+                ctx = fl.get("context", {})
+                title = str((ctx.get("title_placeholders") or {}).get("name", "")).lower()
+                if "tado" in title or "bridge" in title or "ib" in title or "internet" in title:
+                    tado_flow = fl
+                    break
+            if not tado_flow and len(hk_flows) == 1:
+                tado_flow = hk_flows[0]
 
             if tado_flow:
                 flow_id = tado_flow["flow_id"]
@@ -193,12 +234,49 @@ class LocalBridgeManager:
                 )
                 _LOGGER.info("DomoLink-Tado: Résultat appairage HomeKit: %s", result.get("type"))
                 self.discover_local_entities()
-                return {"success": True, "result": result.get("type")}
+                return {
+                    "success": result.get("type") == "create_entry",
+                    "result": result.get("type"),
+                    "mapped_count": len(self._zone_to_local_entity),
+                    "message": (
+                        f"Pont Tado associé en HomeKit Controller ! {len(self._zone_to_local_entity)} zone(s) détectée(s) en local."
+                        if result.get("type") == "create_entry"
+                        else f"Étape suivante requise ({result.get('type')}). Vérifiez le code PIN ou l'état du pont."
+                    ),
+                }
 
             return {
                 "success": False,
-                "message": "Aucun pont Tado en attente de code détecté sur le réseau local. Vérifiez que le pont est allumé sur le même réseau.",
+                "message": "Aucun pont Tado en attente d'appairage HomeKit sur le LAN. S'il est déjà lié à Apple Maison, supprimez-le de l'app Maison iOS pour qu'il apparaisse ici.",
             }
         except Exception as err:
             _LOGGER.error("DomoLink-Tado: Erreur lors de l'appairage HomeKit: %s", err)
+            return {"success": False, "message": str(err)}
+
+    async def async_pair_matter_device(self, code: str) -> dict[str, Any]:
+        """Commission a Tado X device via Home Assistant's local Matter integration."""
+        clean_code = (code or "").strip()
+        if not clean_code:
+            return {"success": False, "message": "Veuillez saisir un code d'appairage Matter (11 ou 21 chiffres)."}
+        if not self.hass.services.has_service("matter", "commission"):
+            return {
+                "success": False,
+                "message": "L'intégration officielle 'Matter' n'est pas configurée dans ce Home Assistant (service matter.commission absent).",
+            }
+        try:
+            _LOGGER.info("DomoLink-Tado: Lancement du commissioning Matter local...")
+            await self.hass.services.async_call(
+                "matter",
+                "commission",
+                {"code": clean_code},
+                blocking=True,
+            )
+            self.discover_local_entities()
+            return {
+                "success": True,
+                "mapped_count": len(self._zone_to_local_entity),
+                "message": "Commissioning Matter envoyé au serveur Matter local ! Patientez quelques secondes puis scannez le réseau.",
+            }
+        except Exception as err:
+            _LOGGER.error("DomoLink-Tado: Erreur lors du commissioning Matter: %s", err)
             return {"success": False, "message": str(err)}

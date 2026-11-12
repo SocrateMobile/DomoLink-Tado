@@ -358,9 +358,76 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     return
             connection.send_result(msg["id"], {})
 
+        @websocket_api.websocket_command({
+            vol.Required("type"): f"{DOMAIN}/pair_local_bridge",
+            vol.Required("pin"): str,
+        })
+        @websocket_api.async_response
+        async def ws_pair_local_bridge(
+            hass_ws: HomeAssistant,
+            connection: Any,
+            msg: dict[str, Any],
+        ) -> None:
+            """Trigger HomeKit LAN pairing for Tado bridge."""
+            for edata in (hass_ws.data.get(DOMAIN) or {}).values():
+                if isinstance(edata, dict) and "coordinator" in edata:
+                    coord = edata["coordinator"]
+                    res = await coord.async_pair_local_bridge(msg["pin"])
+                    if coord.data:
+                        coord.data["local_bridge_active"] = coord.local_bridge.has_local_entities
+                        coord.data["local_bridge_zones"] = dict(coord.local_bridge._zone_to_local_entity)
+                        coord.async_set_updated_data(coord.data)
+                    connection.send_result(msg["id"], res)
+                    return
+            connection.send_result(msg["id"], {"success": False, "message": "Coordinateur introuvable."})
+
+        @websocket_api.websocket_command({
+            vol.Required("type"): f"{DOMAIN}/pair_matter",
+            vol.Required("code"): str,
+        })
+        @websocket_api.async_response
+        async def ws_pair_matter(
+            hass_ws: HomeAssistant,
+            connection: Any,
+            msg: dict[str, Any],
+        ) -> None:
+            """Trigger Matter commissioning for Tado X device."""
+            for edata in (hass_ws.data.get(DOMAIN) or {}).values():
+                if isinstance(edata, dict) and "coordinator" in edata:
+                    coord = edata["coordinator"]
+                    res = await coord.local_bridge.async_pair_matter_device(msg["code"])
+                    connection.send_result(msg["id"], res)
+                    return
+            connection.send_result(msg["id"], {"success": False, "message": "Coordinateur introuvable."})
+
+        @websocket_api.websocket_command({
+            vol.Required("type"): f"{DOMAIN}/scan_local_bridge",
+        })
+        @websocket_api.async_response
+        async def ws_scan_local_bridge(
+            hass_ws: HomeAssistant,
+            connection: Any,
+            msg: dict[str, Any],
+        ) -> None:
+            """Rescan LAN entities for HomeKit / Matter without Cloud calls."""
+            for edata in (hass_ws.data.get(DOMAIN) or {}).values():
+                if isinstance(edata, dict) and "coordinator" in edata:
+                    coord = edata["coordinator"]
+                    coord.local_bridge.discover_local_entities()
+                    if coord.data:
+                        coord.data["local_bridge_active"] = coord.local_bridge.has_local_entities
+                        coord.data["local_bridge_zones"] = dict(coord.local_bridge._zone_to_local_entity)
+                        coord.async_set_updated_data(coord.data)
+                    connection.send_result(msg["id"], coord.local_bridge.get_discovery_status())
+                    return
+            connection.send_result(msg["id"], {})
+
         if not hass.data[DOMAIN].get("_ws_registered"):
             websocket_api.async_register_command(hass, ws_get_dev_snapshot)
             websocket_api.async_register_command(hass, ws_get_matter_provisioning)
+            websocket_api.async_register_command(hass, ws_pair_local_bridge)
+            websocket_api.async_register_command(hass, ws_pair_matter)
+            websocket_api.async_register_command(hass, ws_scan_local_bridge)
             hass.data[DOMAIN]["_ws_registered"] = True
     except Exception as ws_err:
         _LOGGER.debug("DomoLink-Tado: Commandes WebSocket DEV ignorées: %s", ws_err)
