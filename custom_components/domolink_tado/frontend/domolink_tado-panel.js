@@ -233,15 +233,15 @@ class DomolinkTadoPanel extends HTMLElement {
     const climateKeys = Object.keys(states).filter((k) => {
       if (!k.startsWith("climate.")) return false;
       const entity = states[k];
-      const attrs = entity?.attributes || {};
+      if (!entity) return false;
+      const attrs = entity.attributes || {};
+      if (attrs.restored) return false;
+      // Unification des têtes : ne pas afficher les entités HomeKit brutes comme des tuiles autonomes en double
+      if (k.startsWith("climate.tado_smart_radiator_thermostat_") || k.startsWith("climate.tado_smart_thermostat_")) {
+        return false;
+      }
       if (attrs.integration === "domolink_tado") return true;
-      if (attrs.zone_id !== undefined) return true;
-      if (attrs.is_overlay_active !== undefined) return true;
-      if (attrs.tado_mode !== undefined) return true;
-      if (attrs.rate_limit !== undefined) return true;
-      if (attrs.heating_power_percentage !== undefined) return true;
-      if (k.includes("domolink_tado") || k.includes("tado")) return true;
-      if (attrs.friendly_name && attrs.friendly_name.toLowerCase().includes("tado")) return true;
+      if (attrs.zone_id !== undefined && (typeof attrs.zone_id === "number" || /^\d+$/.test(String(attrs.zone_id)))) return true;
       return false;
     });
 
@@ -294,10 +294,34 @@ class DomolinkTadoPanel extends HTMLElement {
         });
       }
 
+      // Statut de connexion unifié : Local (vert), Cloud (jaune), Hors ligne (gris)
+      const isEntityOffline = entity.state === "unavailable" || entity.state === "unknown";
+      let controlStatus = "cloud";
+      if (isEntityOffline) {
+        controlStatus = "offline";
+      } else {
+        const hasLocal = attrs.is_local === true ||
+                         attrs.control_source === "local" ||
+                         (attrs.local_entity && states[attrs.local_entity] && states[attrs.local_entity].state !== "unavailable" && states[attrs.local_entity].state !== "unknown") ||
+                         (this._devSnapshot?.local_bridge?.zones_mapped && this._devSnapshot.local_bridge.zones_mapped[String(zoneId)]);
+        controlStatus = hasLocal ? "local" : "cloud";
+      }
+
+      let controlTooltip = "Accès Cloud Tado (API distante)";
+      if (controlStatus === "local") {
+        controlTooltip = "Accès Local LAN (HomeKit Bridge - 0 jeton Cloud)";
+      } else if (controlStatus === "offline") {
+        controlTooltip = "Tête / Zone hors ligne ou indisponible";
+      }
+
       zones.push({
         entity_id: key,
         zone_id: zoneId,
         name: name,
+        control_status: controlStatus,
+        control_tooltip: controlTooltip,
+        is_local: controlStatus === "local",
+        local_entity: attrs.local_entity || null,
         state: entity.state,
         current_temp: currentTemp,
         target_temp: targetTemp,
@@ -813,6 +837,36 @@ class DomolinkTadoPanel extends HTMLElement {
           display: flex;
           justify-content: space-between;
           align-items: center;
+        }
+
+        .room-card-header-left {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .control-status-dot {
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
+          display: inline-block;
+          flex-shrink: 0;
+          transition: background-color 0.3s ease, box-shadow 0.3s ease;
+        }
+
+        .control-status-dot.dot-local {
+          background-color: #22c55e;
+          box-shadow: 0 0 8px rgba(34, 197, 94, 0.75);
+        }
+
+        .control-status-dot.dot-cloud {
+          background-color: #eab308;
+          box-shadow: 0 0 8px rgba(234, 179, 8, 0.75);
+        }
+
+        .control-status-dot.dot-offline {
+          background-color: #94a3b8;
+          box-shadow: 0 0 4px rgba(148, 163, 184, 0.4);
         }
 
         .current-temp-label {
@@ -3324,7 +3378,7 @@ class DomolinkTadoPanel extends HTMLElement {
       const isVisible = this._selectedLabel === "__ALL__" || z.labels.includes(this._selectedLabel);
       card.style.display = isVisible ? "flex" : "none";
 
-      const sig = `${z.name}|${z.current_temp}|${z.target_temp}|${z.state}|${z.heating_power}|${z.open_window}|${z.child_locked}|${z.labels.join(",")}|${z.primary_device_type}`;
+      const sig = `${z.name}|${z.current_temp}|${z.target_temp}|${z.state}|${z.heating_power}|${z.open_window}|${z.child_locked}|${z.labels.join(",")}|${z.primary_device_type}|${z.control_status}`;
       if (card._sig !== sig) {
         card._sig = sig;
 
@@ -3333,7 +3387,10 @@ class DomolinkTadoPanel extends HTMLElement {
 
         card.innerHTML = `
           <div class="room-card-header">
-            <span class="current-temp-label">${z.current_temp}°C</span>
+            <div class="room-card-header-left">
+              <span class="control-status-dot dot-${z.control_status}" title="${z.control_tooltip}"></span>
+              <span class="current-temp-label">${z.current_temp}°C</span>
+            </div>
             <div class="room-indicators">
               ${z.open_window ? `<span class="indicator-badge window">🪟 Ouverte</span>` : ""}
               ${z.is_heating ? `<span class="indicator-badge flame">🔥 ${z.heating_power}%</span>` : ""}

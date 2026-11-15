@@ -92,9 +92,35 @@ class LocalBridgeManager:
                 if s_lower in ent_id.lower() or s_lower in friendly_name:
                     serial_map[serial] = ent_id
                     # If this device has a zone ID
-                    zid = dev.get("zoneId")
+                    zid = dev.get("zoneId") or dev.get("zone_id")
                     if zid and zid in zones and zid not in zone_map:
                         zone_map[zid] = ent_id
+
+        # 2. Match by zones raw devices topology (serialNo per zone)
+        for z in getattr(self.coordinator, "_zones_raw", []) or []:
+            zid = z.get("id")
+            if zid is None:
+                continue
+            for d in z.get("devices", []) or []:
+                s_no = str(d.get("serialNo", "")).lower()
+                if not s_no:
+                    continue
+                for st in climate_states:
+                    ent_id = st.entity_id
+                    attrs = getattr(st, "attributes", None) or {}
+                    if attrs.get("integration") == "domolink_tado" or "domolink" in ent_id.lower():
+                        continue
+                    fname = (attrs.get("friendly_name") or "").lower()
+                    if s_no in ent_id.lower() or s_no in fname:
+                        zone_map[zid] = ent_id
+                        serial_map[d.get("serialNo")] = ent_id
+                        _LOGGER.info(
+                            "DomoLink-Tado: Détection locale pour Zone '%s' (ID %s) via vanne %s -> %s",
+                            z.get("name"),
+                            zid,
+                            d.get("serialNo"),
+                            ent_id,
+                        )
 
         self._zone_to_local_entity = zone_map
         self._serial_to_local_entity = serial_map
@@ -165,8 +191,32 @@ class LocalBridgeManager:
             _LOGGER.warning("DomoLink-Tado: Échec allumage local sur %s: %s", ent_id, err)
             return False
 
+    async def async_resume_schedule_local(self, zone_id: int) -> bool:
+        """Resume automatic schedule on the local bridge (set mode to auto)."""
+        ent_id = self.get_local_entity_for_zone(zone_id)
+        if not ent_id:
+            return False
+
+        _LOGGER.debug(
+            "DomoLink-Tado [Local Bridge Bypass]: Reprise planning automatique en LAN sur %s (Zone %d)",
+            ent_id,
+            zone_id,
+        )
+        try:
+            await self.hass.services.async_call(
+                "climate",
+                "set_hvac_mode",
+                {"entity_id": ent_id, "hvac_mode": "auto"},
+                blocking=True,
+            )
+            return True
+        except Exception as err:
+            _LOGGER.warning("DomoLink-Tado: Échec reprise planning locale sur %s: %s", ent_id, err)
+            return False
+
     def get_discovery_status(self) -> dict[str, Any]:
         """Inspect HomeKit Controller and Matter entries & pending flows in HA."""
+        self.discover_local_entities()
         hk_entries = []
         matter_entries = []
         pending_hk = []

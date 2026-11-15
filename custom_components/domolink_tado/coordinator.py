@@ -1593,6 +1593,16 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             )
             return
 
+        enable_local = bool(getattr(self, "entry", None) and getattr(self.entry, "options", {}).get(CONF_ENABLE_LOCAL_PRIORITY, DEFAULT_ENABLE_LOCAL_PRIORITY))
+        if enable_local and hasattr(self, "local_bridge") and hasattr(self.local_bridge, "async_resume_schedule_local"):
+            local_ok = await self.local_bridge.async_resume_schedule_local(zone_id)
+            if local_ok:
+                patch = {"is_overlay_active": False}
+                if self.data and zone_id in self.data.get("zones", {}):
+                    self.data["zones"][zone_id].update(patch)
+                    self.async_set_updated_data(self.data)
+                return
+
         patch = {
             "is_overlay_active": False,
         }
