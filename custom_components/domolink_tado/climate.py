@@ -301,6 +301,17 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
             "valve_calibration_modes": self.coordinator.entry.options.get(CONF_VALVE_CALIBRATION_MODES, {}),
             "rate_limit": (self.coordinator.data or {}).get("rate_limit") or {},
         }
+        local_ent = None
+        if hasattr(self.coordinator, "local_bridge") and hasattr(self.coordinator.local_bridge, "get_local_entity_for_zone"):
+            local_ent = self.coordinator.local_bridge.get_local_entity_for_zone(self.zone_id)
+        is_loc = bool(
+            local_ent
+            and self.hass.states.get(local_ent)
+            and self.hass.states.get(local_ent).state not in ("unavailable", "unknown")
+        )
+        attrs["local_entity"] = local_ent
+        attrs["is_local"] = is_loc
+        attrs["control_source"] = "local" if is_loc else "cloud"
         if self.is_ac:
             attrs["ac_mode"] = z.get("ac_mode")
             attrs["fan_speed"] = z.get("fan_speed")
