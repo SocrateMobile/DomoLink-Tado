@@ -428,8 +428,8 @@ class WindowGuard:
         if zone_id in self._episodes:
             return
 
-        current_setting = zdata.get("setting", {})
-        current_power = current_setting.get("power", "OFF") if current_setting else "OFF"
+        current_setting = zdata.get("setting") or {}
+        current_power = zdata.get("power") or current_setting.get("power", "OFF")
         current_overlay = zdata.get("overlay")
 
         # Règle : Si la zone est déjà OFF, aucun appel API inutile nécessaire (économie quota)
@@ -519,8 +519,8 @@ class WindowGuard:
 
         # Règle anti-écrasement : vérifier si l'utilisateur a modifié la consigne manuellement
         # Si la zone n'est plus à l'arrêt ou a été modifiée par l'utilisateur, ne pas écraser
-        current_setting = zdata.get("setting", {})
-        current_power = current_setting.get("power", "OFF") if current_setting else "OFF"
+        current_setting = zdata.get("setting") or {}
+        current_power = zdata.get("power") or current_setting.get("power", "OFF")
         if episode.we_own_overlay and current_power != "OFF":
             _LOGGER.info(
                 "DomoLink-Tado WindowGuard: L'utilisateur a modifié la consigne de la zone %s pendant l'aération. Rétablissement ignoré.",
@@ -559,7 +559,7 @@ class WindowGuard:
                         home_id=self.coordinator.home_id,
                         zone_id=zone_id,
                         power=prev_power,
-                        temperature=prev_temp,
+                        target_temp=prev_temp,
                     )
                 else:
                     await self.coordinator.async_resume_schedule(zone_id)

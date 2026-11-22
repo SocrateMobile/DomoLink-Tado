@@ -344,6 +344,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             vol.Required("type"): f"{DOMAIN}/get_matter_provisioning",
             vol.Required("device_serial"): str,
         })
+        @websocket_api.require_admin
         @websocket_api.async_response
         async def ws_get_matter_provisioning(
             hass_ws: HomeAssistant,
@@ -362,6 +363,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             vol.Required("type"): f"{DOMAIN}/pair_local_bridge",
             vol.Required("pin"): str,
         })
+        @websocket_api.require_admin
         @websocket_api.async_response
         async def ws_pair_local_bridge(
             hass_ws: HomeAssistant,
@@ -385,6 +387,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             vol.Required("type"): f"{DOMAIN}/pair_matter",
             vol.Required("code"): str,
         })
+        @websocket_api.require_admin
         @websocket_api.async_response
         async def ws_pair_matter(
             hass_ws: HomeAssistant,
@@ -403,6 +406,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         @websocket_api.websocket_command({
             vol.Required("type"): f"{DOMAIN}/scan_local_bridge",
         })
+        @websocket_api.require_admin
         @websocket_api.async_response
         async def ws_scan_local_bridge(
             hass_ws: HomeAssistant,

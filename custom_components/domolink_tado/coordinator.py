@@ -1439,9 +1439,11 @@ class DomolinkTadoCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         duration_seconds: int | None = None,
     ) -> None:
         current_zone = (self.data.get("zones", {})).get(zone_id) if self.data else None
-        is_ac = current_zone.get("type") == "AIR_CONDITIONING" if current_zone else False
-        max_limit = 30.0 if is_ac else 25.0
-        min_limit = 5.0
+        zone_type = current_zone.get("type") if current_zone else None
+        is_ac = zone_type == "AIR_CONDITIONING"
+        is_hot_water = zone_type == "HOT_WATER"
+        max_limit = 65.0 if is_hot_water else (30.0 if is_ac else 25.0)
+        min_limit = 30.0 if is_hot_water else 5.0
         rounded_temp = round(max(min_limit, min(max_limit, float(target_temp))), 1)
 
         # Filtre anti-redondance local (supprime les requêtes API inutiles)
