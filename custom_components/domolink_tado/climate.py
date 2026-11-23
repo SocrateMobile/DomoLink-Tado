@@ -61,7 +61,7 @@ async def async_setup_entry(
 class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEntity):
     """Representation of a DomoLink-Tado climate zone/thermostat (Heating or Smart AC)."""
 
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_precision = PRECISION_HALVES
     _attr_target_temperature_step = TEMP_STEP
 
@@ -177,7 +177,7 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
         )
 
     @property
-    def current_temperature(self) -> float | None:
+    def native_current_temperature(self) -> float | None:
         """Return current measured room temperature."""
         return self._zone_data.get("inside_temperature")
 
@@ -187,7 +187,7 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
         return self._zone_data.get("humidity")
 
     @property
-    def target_temperature(self) -> float | None:
+    def native_target_temperature(self) -> float | None:
         """Return current target temperature."""
         return self._zone_data.get("target_temperature")
 
@@ -374,7 +374,7 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
 
         if not self.is_ac:
             if hvac_mode == HVACMode.HEAT:
-                target = self.target_temperature or 20.0
+                target = self.native_target_temperature or 20.0
                 await self.async_set_temperature(temperature=target)
             return
 
@@ -386,7 +386,7 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
             HVACMode.FAN_ONLY: "FAN",
         }
         tado_mode = tado_mode_map.get(hvac_mode, "COOL")
-        target = self.target_temperature or (22.0 if tado_mode != "HEAT" else 20.0)
+        target = self.native_target_temperature or (22.0 if tado_mode != "HEAT" else 20.0)
         overlay_mode = self.entry.options.get(CONF_OVERLAY_MODE, DEFAULT_OVERLAY_MODE)
         duration = self.entry.options.get(CONF_OVERLAY_DURATION, DEFAULT_OVERLAY_DURATION)
 
@@ -408,7 +408,7 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
         overlay_mode = self.entry.options.get(CONF_OVERLAY_MODE, DEFAULT_OVERLAY_MODE)
         duration = self.entry.options.get(CONF_OVERLAY_DURATION, DEFAULT_OVERLAY_DURATION)
         curr_mode = self._zone_data.get("ac_mode") or "COOL"
-        target = self.target_temperature or 22.0
+        target = self.native_target_temperature or 22.0
 
         await self.coordinator.async_set_ac_mode(
             zone_id=self.zone_id,
@@ -428,7 +428,7 @@ class DomolinkTadoClimate(CoordinatorEntity[DomolinkTadoCoordinator], ClimateEnt
         overlay_mode = self.entry.options.get(CONF_OVERLAY_MODE, DEFAULT_OVERLAY_MODE)
         duration = self.entry.options.get(CONF_OVERLAY_DURATION, DEFAULT_OVERLAY_DURATION)
         curr_mode = self._zone_data.get("ac_mode") or "COOL"
-        target = self.target_temperature or 22.0
+        target = self.native_target_temperature or 22.0
 
         await self.coordinator.async_set_ac_mode(
             zone_id=self.zone_id,

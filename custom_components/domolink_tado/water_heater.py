@@ -63,7 +63,7 @@ async def async_setup_entry(
 class DomolinkTadoWaterHeater(CoordinatorEntity[DomolinkTadoCoordinator], WaterHeaterEntity):
     """Représentation d'un circuit d'eau chaude sanitaire Tado."""
 
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_min_temp = 30.0
     _attr_max_temp = 65.0
     _attr_operation_list = SUPPORTED_OPERATIONS
@@ -93,7 +93,7 @@ class DomolinkTadoWaterHeater(CoordinatorEntity[DomolinkTadoCoordinator], WaterH
         """Caractéristiques supportées par le circuit d'eau chaude."""
         features = WaterHeaterEntityFeature.OPERATION_MODE
         # Si la zone supporte un réglage de température de consigne
-        if self.target_temperature is not None:
+        if self.native_target_temperature is not None:
             features |= WaterHeaterEntityFeature.TARGET_TEMPERATURE
         return features
 
@@ -108,13 +108,13 @@ class DomolinkTadoWaterHeater(CoordinatorEntity[DomolinkTadoCoordinator], WaterH
         return STATE_AUTO
 
     @property
-    def current_temperature(self) -> float | None:
+    def native_current_temperature(self) -> float | None:
         """Température actuelle de l'eau chaude si disponible."""
         temp = self._zone_data.get("inside_temperature")
         return float(temp) if temp is not None else None
 
     @property
-    def target_temperature(self) -> float | None:
+    def native_target_temperature(self) -> float | None:
         """Température de consigne d'eau chaude."""
         temp = self._zone_data.get("target_temperature")
         return float(temp) if temp is not None else None
